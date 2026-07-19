@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(glab auth status)",
+      "Bash(glab auth login)"
+    ]
+  }
+}
