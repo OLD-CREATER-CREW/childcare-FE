@@ -1,3 +1,7 @@
+/* my-ui 디자인 시스템 토큰 — 원본(tokens.css) 위에 브랜드 오버라이드(tokens.brand.css)를 얹습니다. */
+@import "./tokens.css";
+@import "./tokens.brand.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

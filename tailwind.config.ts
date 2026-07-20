@@ -27,10 +27,18 @@ const config: Config = {
         blue: { DEFAULT: "#3D6FA8", soft: "#EAF1F8" },
         confirm: { DEFAULT: "#1C7A43", soft: "#DFF2E6" },
       },
+      /*
+       * my-ui --radius-* 토큰 참조.
+       * sm/md/lg는 기존 값(8/12/16px)과 토큰이 같아 치환만 했습니다.
+       * xl/2xl은 Tailwind 기본값(12/16px)과 토큰(20/24px)이 달라 그대로 둡니다 —
+       * .notice·.modal·.photo 등 기존 사용처의 모서리가 바뀌기 때문.
+       */
       borderRadius: {
-        sm: "8px",
-        md: "12px",
-        lg: "16px",
+        "2xs": "var(--radius-2xs)",
+        xs: "var(--radius-xs)",
+        sm: "var(--radius-sm)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
       },
       boxShadow: {
         card: "0 1px 2px rgba(33,43,34,.05), 0 4px 14px rgba(33,43,34,.06)",

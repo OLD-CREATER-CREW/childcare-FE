@@ -1,0 +1,100 @@
+/**
+ * my-ui semantic 토큰의 브랜드 오버라이드 — "교실의 종이와 잎"
+ *
+ * tokens.css(디자인 시스템 원본)는 손대지 않고, 이 파일에서 브랜드 색상만
+ * 덮어씁니다. DS의 radius·typography·size·state 머신은 원본을 그대로 씁니다.
+ *
+ * 왜 오버라이드하나:
+ *   my-ui primary는 인디고(#4f68e7)지만 이 앱의 정체성은 그린(#2E7D52)이고,
+ *   사이드바·칩·지표 카드 등 "유지" 대상 UI가 이미 그린을 쓰고 있습니다.
+ *   토큰 값만 바꾸면 포팅한 컴포넌트가 기존 화면과 자연스럽게 어울립니다.
+ *
+ * 오버라이드 범위: primary(그린) / error(코랄) / item-selected / focus ring.
+ * secondary·grayblue·gray·info는 DS 원본 유지 — 이 앱에서 브랜드 색이 아님.
+ */
+
+:root {
+  /* ---------- 그린 ramp (primary) ---------- */
+  /* globals.css의 --green* 계열에서 파생. 100/500/700이 각각 soft/green/deep. */
+  --atomic-primary-100: #e8f3ec;
+  --atomic-primary-200: #c9e3d3;
+  --atomic-primary-300: #9bcbb0;
+  --atomic-primary-400: #5fa97f;
+  --atomic-primary-500: #2e7d52;
+  --atomic-primary-600: #276b47;
+  --atomic-primary-700: #1f5c3c;
+  --atomic-primary-800: #184b31;
+  --atomic-primary-900: #123a26;
+
+  --semantic-action-background-primary-solid-default: #2e7d52;
+  --semantic-action-background-primary-solid-hover: #276b47;
+  --semantic-action-background-primary-solid-pressed: #1f5c3c;
+  --semantic-action-background-primary-subtle-default: #e8f3ec;
+  --semantic-action-background-primary-subtle-hover: #c9e3d3;
+  --semantic-action-background-primary-subtle-pressed: #9bcbb0;
+  --semantic-action-background-primary-outline-hover: rgba(18, 58, 38, 0.08);
+  --semantic-action-background-primary-outline-pressed: rgba(18, 58, 38, 0.16);
+  --semantic-action-background-primary-ghost-hover: rgba(18, 58, 38, 0.08);
+  --semantic-action-background-primary-ghost-pressed: rgba(18, 58, 38, 0.16);
+
+  --semantic-action-border-primary-default: #5fa97f;
+  --semantic-action-border-primary-hover: #2e7d52;
+  --semantic-action-border-primary-pressed: #276b47;
+  --semantic-action-border-primary-focused: #2e7d52;
+
+  --semantic-action-foreground-primary-default: #276b47;
+  --semantic-action-foreground-primary-hover: #1f5c3c;
+  --semantic-action-foreground-primary-pressed: #184b31;
+
+  /* ---------- 코랄 ramp (error) ---------- */
+  /* .btn.danger / .notice.warn / .check.miss가 쓰는 코랄과 맞춤. */
+  --atomic-error-100: #fbece9;
+  --atomic-error-200: #f2d2cb;
+  --atomic-error-300: #e9b0a5;
+  --atomic-error-400: #d4796a;
+  --atomic-error-500: #be4f3f;
+  --atomic-error-600: #a54334;
+  --atomic-error-700: #8f3a2d;
+  --atomic-error-800: #6f2c22;
+  --atomic-error-900: #4f1f18;
+
+  --semantic-action-background-error-solid-default: #be4f3f;
+  --semantic-action-background-error-solid-hover: #a54334;
+  --semantic-action-background-error-solid-pressed: #8f3a2d;
+  --semantic-action-background-error-subtle-default: #fbece9;
+  --semantic-action-background-error-subtle-hover: #f2d2cb;
+  --semantic-action-background-error-subtle-pressed: #e9b0a5;
+  --semantic-action-background-error-outline-hover: rgba(143, 58, 45, 0.08);
+  --semantic-action-background-error-outline-pressed: rgba(143, 58, 45, 0.16);
+  --semantic-action-background-error-ghost-hover: rgba(143, 58, 45, 0.08);
+  --semantic-action-background-error-ghost-pressed: rgba(143, 58, 45, 0.16);
+
+  --semantic-action-border-error-default: #e9b0a5;
+  --semantic-action-border-error-hover: #be4f3f;
+  --semantic-action-border-error-pressed: #a54334;
+  --semantic-action-border-error-focused: #be4f3f;
+
+  --semantic-action-foreground-error-default: #a54334;
+  --semantic-action-foreground-error-hover: #8f3a2d;
+  --semantic-action-foreground-error-pressed: #6f2c22;
+
+  /* ---------- 선택 상태 / 폼 컨트롤 ---------- */
+  /* .nav-item.active · .chip.on · .rail-item.on의 그린 선택색과 맞춤. */
+  --semantic-item-background-selected: #e8f3ec;
+  --semantic-item-background-selected-hover: #c9e3d3;
+  --semantic-item-background-selected-pressed: #9bcbb0;
+  --semantic-item-background-hover: rgba(18, 58, 38, 0.06);
+  --semantic-item-background-pressed: rgba(18, 58, 38, 0.12);
+  --semantic-item-foreground-selected: #1f5c3c;
+  --semantic-item-foreground-icon-selected: #2e7d52;
+  --semantic-item-foreground-error: #be4f3f;
+
+  --semantic-control-background-indicator-checked-default: #2e7d52;
+  --semantic-control-border-indicator-checked: #5fa97f;
+  --semantic-control-border-focused: #2e7d52;
+  --semantic-control-foreground-required: #be4f3f;
+  --semantic-control-foreground-label-error: #be4f3f;
+  --semantic-control-foreground-content-error: #be4f3f;
+  --semantic-control-foreground-helptext-error: #be4f3f;
+  --semantic-control-border-error: #d4796a;
+}
