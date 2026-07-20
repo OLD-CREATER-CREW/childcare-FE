@@ -16,7 +16,10 @@ dist/
 # local-only settings
 settings.local.json
 .claude/settings.local.json
+
+# oh-my-claudecode / 파일럿 계측 산출물 (기계 생성 — 커밋 대상 아님)
 .omc/
+docs/pilot-metrics/
 
 # misc
 .DS_Store

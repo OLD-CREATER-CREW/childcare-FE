@@ -38,6 +38,12 @@
             "type": "command",
             "command": "node .claude/hooks/check-commit-typecheck.js",
             "timeout": 120000
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/forbid-coauthor.mjs\"",
+            "if": "Bash(git commit*)",
+            "timeout": 10
           }
         ]
       },
