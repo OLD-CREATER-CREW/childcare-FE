@@ -36,7 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/check-commit-typecheck.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-commit-typecheck.mjs\"",
+            "if": "Bash(git commit*)",
             "timeout": 120000
           },
           {
