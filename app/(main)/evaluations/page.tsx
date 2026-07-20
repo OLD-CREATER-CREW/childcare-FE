@@ -1,28 +1,71 @@
 "use client";
 
-import { useObservations } from "@/lib/queries";
+import { useState } from "react";
+import { useChildren, useObservations } from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
-import { Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
+import {
+  Avatar,
+  N,
+  Notice,
+  PageHead,
+  Skeleton,
+  SpecBar,
+} from "@/components/ui";
 
-// SCR-011 발달평가서 — 누적 관찰 종합 (컷 시 목업 시연)
+// SCR-011 발달평가서 — 누적 관찰 종합 (아동 단위 문서)
 export default function EvaluationsPage() {
-  const obsQuery = useObservations("c01");
+  const childrenQuery = useChildren();
+  const [childId, setChildId] = useState("c01");
+  const obsQuery = useObservations(childId);
+
+  const kids = childrenQuery.data ?? [];
+  const child = kids.find((c) => c.id === childId);
+  const totalObs =
+    obsQuery.data?.domains.reduce((sum, d) => sum + d.count, 0) ?? 0;
 
   return (
     <>
       <PageHead
         title="발달평가서"
-        sub="김민준 · 2026 — 누적 관찰 종합 (컷 시 목업 시연)"
+        sub={`${child?.name ?? "…"} · 2026 — 누적 관찰 종합`}
+        right={
+          <select
+            className="input w-auto"
+            value={childId}
+            onChange={(e) => setChildId(e.target.value)}
+            aria-label="아이 선택"
+          >
+            {(kids.length ? kids : [{ id: "c01", name: "김민준" }]).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        }
       />
       <SpecBar
         scr="SCR-011"
         fn={["FN-011", "FN-005"]}
         ep={["EP-010 generate(dev_eval)", "EP-013", "EP-014"]}
       />
+
       <DocumentWorkbench
+        key={childId}
         type="evaluation"
+        childId={childId}
         source={
           <>
+            {child && (
+              <div className="mb-3 flex items-center gap-2.5">
+                <Avatar name={child.name} color={child.color} size="lg" />
+                <div>
+                  <div className="font-bold">{child.name}</div>
+                  <div className="text-[12px] text-muted">
+                    {child.birthDate} · 누적 관찰 {totalObs}건
+                  </div>
+                </div>
+              </div>
+            )}
             {obsQuery.isLoading ? (
               <Skeleton lines={5} />
             ) : (
@@ -30,14 +73,17 @@ export default function EvaluationsPage() {
                 <tbody>
                   {obsQuery.data?.domains.map((d) => (
                     <tr key={d.name}>
-                      <td>{d.name}</td>
+                      <td>
+                        <N n={2} />
+                        {d.name}
+                      </td>
                       <td className="text-right font-bold">관찰 {d.count}건</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            <div className="mt-2.5">
+            <div className="mt-3">
               <Notice kind="soft">
                 입력이 상한(8K)을 넘으면 최근·대표 기록 위주로 추려 생성하고,
                 근거로 남긴 기록을 표시합니다.

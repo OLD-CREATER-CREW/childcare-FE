@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { Sprout } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useLogin } from "@/lib/queries";
@@ -30,21 +31,26 @@ export default function LoginPage() {
 
   return (
     <div className="grid min-h-screen place-items-center p-5">
-      <div className="w-full max-w-[420px]">
+      <motion.div
+        className="w-full max-w-[420px]"
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      >
         <SpecBar
           scr="SCR-001"
           fn={["FN-015"]}
           ep={["EP-001 POST /api/auth/login"]}
         />
-        <form className="card px-7 py-[30px]" onSubmit={submit}>
-          <div className="mb-[22px] text-center">
-            <div className="logo-mark mx-auto mb-3 h-[52px] w-[52px] rounded-lg">
-              <Sprout size={26} />
+        <form className="card px-8 py-8" onSubmit={submit}>
+          <div className="mb-6 text-center">
+            <div className="logo-mark mx-auto mb-3.5 h-[54px] w-[54px] rounded-2xl">
+              <Sprout size={27} />
             </div>
-            <div className="text-[19px] font-extrabold">
+            <div className="text-[19px] font-extrabold tracking-tight">
               어린이집 AI 행정비서
             </div>
-            <div className="text-[13px] text-muted">
+            <div className="mt-0.5 text-[13px] text-muted">
               기록은 한 번, 문서는 AI가
             </div>
           </div>
@@ -57,6 +63,7 @@ export default function LoginPage() {
               id="username"
               className="input"
               placeholder="기관·교사 계정 아이디"
+              autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
@@ -71,19 +78,20 @@ export default function LoginPage() {
               className="input"
               type="password"
               placeholder="●●●●●●●●"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
           <button
             type="submit"
-            className="btn primary big w-full"
+            className="btn primary big mt-1 w-full"
             disabled={loginMutation.isPending}
           >
             <N n={3} />
             {loginMutation.isPending ? "로그인 중…" : "로그인"}
           </button>
-          <div className="mt-4">
+          <div className="mt-5">
             <Notice kind="warn">
               ⚠{" "}
               <span>
@@ -94,7 +102,7 @@ export default function LoginPage() {
             </Notice>
           </div>
         </form>
-      </div>
+      </motion.div>
       <Toast />
     </div>
   );

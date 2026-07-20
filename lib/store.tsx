@@ -25,7 +25,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [replay, setReplay] = useState(false);
-  const [annot, setAnnot] = useState(true);
+  const [annot, setAnnot] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [toastShow, setToastShow] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();

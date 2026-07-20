@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BarChart3,
   Bell,
@@ -15,7 +15,6 @@ import {
   Mail,
   Menu,
   Mic,
-  NotebookPen,
   Pencil,
   Search,
   Settings,
@@ -23,7 +22,8 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useApp } from "@/lib/store";
-import { TODAY, CLASS_NAME, TEACHER_NAME } from "@/lib/data/mock";
+import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
+import { useRecordSummary } from "@/lib/queries";
 import { Toast } from "@/components/ui";
 
 type NavItem = {
@@ -31,7 +31,7 @@ type NavItem = {
   icon: React.ComponentType<{ size?: number | string; className?: string }>;
   label: string;
   scr: string;
-  cnt?: number;
+  badge?: (pendingDocs: number, unclassified: number) => number;
 };
 
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -40,8 +40,20 @@ const NAV: { group: string; items: NavItem[] }[] = [
     items: [
       { href: "/", icon: Home, label: "오늘 홈", scr: "002" },
       { href: "/records", icon: Pencil, label: "하루 기록", scr: "003" },
-      { href: "/notices", icon: Mail, label: "알림장", scr: "004", cnt: 3 },
-      { href: "/photos", icon: Camera, label: "사진함", scr: "005", cnt: 5 },
+      {
+        href: "/notices",
+        icon: Mail,
+        label: "알림장",
+        scr: "004",
+        badge: (docs) => docs,
+      },
+      {
+        href: "/photos",
+        icon: Camera,
+        label: "사진함",
+        scr: "005",
+        badge: (_docs, photos) => photos,
+      },
       { href: "/journal", icon: BookOpen, label: "보육일지", scr: "006" },
       { href: "/plans", icon: CalendarDays, label: "계획안", scr: "007" },
     ],
@@ -96,6 +108,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { replay, annot, setAnnot } = useApp();
   const [open, setOpen] = useState(false);
+  const summaryQuery = useRecordSummary();
+
+  const pendingDocs = summaryQuery.data?.pendingDocs ?? 0;
+  const unclassified = summaryQuery.data?.unclassifiedPhotos ?? 0;
+  const bellCount = pendingDocs + unclassified;
+
+  // 좁은 창에서 라우트가 바뀌면 드로어를 닫는다
+  useEffect(() => {
+    setOpen(false);
+  }, [path]);
 
   return (
     <div className="app">
@@ -109,12 +131,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </button>
         <div className="logo">
           <span className="logo-mark">
-            <Sprout size={16} />
+            <Sprout size={17} />
           </span>{" "}
           어린이집 AI 행정비서
         </div>
         <span className="top-date text-[13px] text-muted">
-          {TODAY} · {CLASS_NAME}
+          {TODAY_LABEL} · {CLASS_NAME}
         </span>
         <div className="flex-1" />
         {replay && <span className="replay-pill">▶ 재생 모드</span>}
@@ -127,12 +149,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
           />{" "}
           명세 주석
         </label>
-        <button className="bell" aria-label="알림">
-          <Bell size={16} className="mx-auto" />
-          <span className="dot">8</span>
+        <button className="bell" aria-label={`알림 ${bellCount}건`}>
+          <Bell size={16} />
+          {bellCount > 0 && <span className="dot">{bellCount}</span>}
         </button>
         <div className="user-chip">
-          <span className="avatar">김</span>
+          <span
+            className="avatar"
+            style={{ background: "var(--green)" }}
+            aria-hidden
+          >
+            {TEACHER_NAME.slice(0, 1)}
+          </span>
           <span className="name">{TEACHER_NAME} · 담임</span>
         </div>
       </header>
@@ -143,27 +171,29 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="nav-group">{g.group}</div>
             {g.items.map((it) => {
               const Icon = it.icon;
+              const cnt = it.badge?.(pendingDocs, unclassified) ?? 0;
               return (
                 <Link
                   key={it.href}
                   href={it.href}
                   className={`nav-item ${path === it.href ? "active" : ""}`}
-                  onClick={() => setOpen(false)}
                 >
-                  <Icon size={17} className="w-5 flex-none" />
+                  <Icon size={17} className="ico w-5 flex-none" />
                   {it.label}
-                  {it.cnt ? <span className="cnt">{it.cnt}</span> : null}
+                  {cnt > 0 ? <span className="cnt">{cnt}</span> : null}
                   <span className="nav-scr">{it.scr}</span>
                 </Link>
               );
             })}
           </div>
         ))}
-        <div className="nav-group">진입</div>
-        <Link href="/login" className="nav-item">
-          <KeyRound size={17} className="w-5 flex-none" /> 로그인
-          <span className="nav-scr">001</span>
-        </Link>
+        <div className="mt-auto">
+          <div className="nav-group">진입</div>
+          <Link href="/login" className="nav-item">
+            <KeyRound size={17} className="ico w-5 flex-none" /> 로그인
+            <span className="nav-scr">001</span>
+          </Link>
+        </div>
       </nav>
 
       <main className="main">{children}</main>

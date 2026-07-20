@@ -10,12 +10,18 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        paper: "#FAFAF7",
+        paper: "#F7F8F4",
         surface: "#FFFFFF",
-        ink: "#212B22",
-        muted: "#6B7770",
-        line: { DEFAULT: "#E4E8E1", strong: "#C9D1C9" },
-        green: { DEFAULT: "#2E7D52", deep: "#215E3D", soft: "#E9F3ED" },
+        ink: "#1F2A21",
+        muted: "#68746C",
+        faint: "#98A29B",
+        line: { DEFAULT: "#E5E9E2", strong: "#CBD3CA" },
+        green: {
+          DEFAULT: "#2E7D52",
+          deep: "#1F5C3C",
+          soft: "#E8F3EC",
+          ghost: "#F2F8F4",
+        },
         amber: { DEFAULT: "#8A6410", bg: "#FFF6DA", line: "#EBD79A" },
         coral: { DEFAULT: "#BE4F3F", soft: "#FBECE9" },
         blue: { DEFAULT: "#3D6FA8", soft: "#EAF1F8" },

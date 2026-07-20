@@ -1,0 +1,952 @@
+import type {
+  AppSettings,
+  ChecklistData,
+  Child,
+  ConsultData,
+  ConsultSession,
+  DailyRecord,
+  DailyRecordInput,
+  DevelopmentDomain,
+  DocStatus,
+  DocType,
+  DocumentDraft,
+  MetricsSummary,
+  NoticeQueue,
+  ObservationData,
+  ObservationEntry,
+  Photo,
+  PhotoInbox,
+  RecordSummary,
+} from "@/lib/types";
+import { DEV_DOMAINS } from "@/lib/types";
+
+/**
+ * 상태형 인메모리 DB — MSW 핸들러의 유일한 데이터 소스.
+ * 저장·확정·발송·분류가 실제로 상태를 바꾸며, 알림장 초안은 하루 기록에서 파생됩니다.
+ * 백엔드 연결 시 이 파일과 handlers.ts만 걷어내면 됩니다.
+ */
+
+import { CLASS_NAME, TEACHER_NAME, TODAY } from "@/lib/constants";
+
+export { CLASS_NAME, TEACHER_NAME, TODAY };
+
+const AVATAR_COLORS = [
+  "#2E7D52",
+  "#3D6FA8",
+  "#B0713A",
+  "#7C5CB0",
+  "#3A8F8A",
+  "#BE4F3F",
+];
+
+type ChildSeed = {
+  id: string;
+  name: string;
+  birthDate: string;
+  gender: "남" | "여";
+  guardian: string;
+  allergy?: string;
+  recorded: boolean;
+  attending: boolean;
+};
+
+const CHILD_SEEDS: ChildSeed[] = [
+  {
+    id: "c01",
+    name: "김민준",
+    birthDate: "2022-03-14",
+    gender: "남",
+    guardian: "김지영",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c02",
+    name: "이서연",
+    birthDate: "2022-05-02",
+    gender: "여",
+    guardian: "이수진",
+    allergy: "달걀",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c03",
+    name: "박도윤",
+    birthDate: "2022-01-27",
+    gender: "남",
+    guardian: "박현우",
+    recorded: false,
+    attending: true,
+  },
+  {
+    id: "c04",
+    name: "최지우",
+    birthDate: "2022-08-19",
+    gender: "여",
+    guardian: "최은주",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c05",
+    name: "정하은",
+    birthDate: "2022-06-08",
+    gender: "여",
+    guardian: "정민아",
+    allergy: "견과류",
+    recorded: false,
+    attending: false,
+  },
+  {
+    id: "c06",
+    name: "한소민",
+    birthDate: "2022-11-23",
+    gender: "여",
+    guardian: "한지혜",
+    recorded: false,
+    attending: true,
+  },
+  {
+    id: "c07",
+    name: "오지호",
+    birthDate: "2022-02-11",
+    gender: "남",
+    guardian: "오세라",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c08",
+    name: "배수아",
+    birthDate: "2022-09-05",
+    gender: "여",
+    guardian: "배정현",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c09",
+    name: "임도현",
+    birthDate: "2022-04-30",
+    gender: "남",
+    guardian: "임소연",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c10",
+    name: "강예린",
+    birthDate: "2022-07-17",
+    gender: "여",
+    guardian: "강미래",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c11",
+    name: "조은우",
+    birthDate: "2022-10-09",
+    gender: "남",
+    guardian: "조아라",
+    allergy: "우유",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c12",
+    name: "서다인",
+    birthDate: "2022-12-01",
+    gender: "여",
+    guardian: "서지원",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c13",
+    name: "문시우",
+    birthDate: "2022-03-28",
+    gender: "남",
+    guardian: "문가영",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c14",
+    name: "홍라온",
+    birthDate: "2022-08-02",
+    gender: "남",
+    guardian: "홍유나",
+    recorded: true,
+    attending: true,
+  },
+  {
+    id: "c15",
+    name: "유하람",
+    birthDate: "2022-05-21",
+    gender: "여",
+    guardian: "유선영",
+    recorded: true,
+    attending: true,
+  },
+];
+
+const DEFAULT_ACTIVITIES = ["바깥놀이", "블록쌓기"];
+
+const MEMO_SEEDS: Record<string, string> = {
+  c01: "친구와 장난감을 두고 잠시 다퉜지만 금방 화해하고 함께 놀이함",
+  c02: "역할놀이에서 친구들에게 배역을 나눠 주며 놀이를 이끎",
+  c04: "그림 그리기에 오래 집중, 완성작을 친구들에게 설명함",
+  c07: "미끄럼틀 계단을 스스로 오르내리며 자신감을 보임",
+  c08: "동화 듣기 시간에 뒷이야기를 상상해 발표함",
+  c09: "블록으로 높은 탑을 쌓고 무너지지 않게 균형을 잡음",
+  c10: "새로 온 친구에게 먼저 다가가 놀이를 권함",
+  c11: "우유 대신 두유를 받고 스스로 자리 정리를 함",
+  c12: "노래에 맞춰 율동을 만들어 친구들과 공유함",
+  c13: "개미 행렬을 오래 관찰하며 질문을 많이 함",
+  c14: "점심 배식 도우미 역할을 끝까지 해냄",
+  c15: "가위질이 능숙해져 곡선 오리기에 성공함",
+};
+
+// ---------- 상태 컨테이너 ----------
+
+type DbState = {
+  children: Child[];
+  records: Map<string, DailyRecord>; // key: `${childId}:${date}`
+  documents: Map<string, DocumentDraft>; // key: `${type}:${childId ?? "class"}`
+  photos: Photo[];
+  photoSeq: number;
+  observations: ObservationEntry[];
+  obsSeq: number;
+  consults: ConsultSession[];
+  settings: AppSettings;
+};
+
+function recordKey(childId: string, date: string) {
+  return `${childId}:${date}`;
+}
+
+function docKey(type: DocType, childId: string | null) {
+  return `${type}:${childId ?? "class"}`;
+}
+
+// ---------- 초안 생성기 (실서비스의 LLM 호출 대체) ----------
+
+const josa = (name: string, a: string, b: string) => {
+  const code = name.charCodeAt(name.length - 1);
+  const hasJong = code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 > 0;
+  return hasJong ? a : b;
+};
+
+function noticeContent(child: Child, rec: DailyRecord): string {
+  const first = child.name.slice(1) || child.name;
+  const acts = rec.activities.length
+    ? rec.activities.join(", ")
+    : "실내 자유놀이";
+  const lunchLine =
+    rec.lunch === "다 먹음"
+      ? "점심도 남김없이 잘 먹었고"
+      : `점심은 ${rec.lunch} 상태였고`;
+  const napMin =
+    (Number(rec.napTo.slice(0, 2)) * 60 +
+      Number(rec.napTo.slice(3)) -
+      (Number(rec.napFrom.slice(0, 2)) * 60 + Number(rec.napFrom.slice(3)))) |
+    0;
+  const napLine =
+    rec.napQuality === "잘 잤어요"
+      ? `낮잠도 ${Math.floor(napMin / 60) ? `${Math.floor(napMin / 60)}시간 ` : ""}${napMin % 60 ? `${napMin % 60}분 ` : ""}동안 푹 잤답니다`
+      : `낮잠 시간에는 ${rec.napQuality === "뒤척였어요" ? "조금 뒤척였지만 편안히 쉬었어요" : "잠들지 못했지만 조용히 몸을 쉬었어요"}`;
+  const memoLine = rec.memo ? ` ${rec.memo.replace(/함$|음$/, "했어요")}.` : "";
+  return `오늘 ${first}${josa(first, "이는", "는")} ${acts} 활동을 하며 즐거운 하루를 보냈어요. ${lunchLine}, ${napLine}.${memoLine} 내일도 건강하게 만나요! 🌻`;
+}
+
+function journalContent(): string {
+  const recs = todaysRecords();
+  const attending = state.children.filter((c) => c.attending).length;
+  const absent = state.children.length - attending;
+  const acts = new Set<string>();
+  recs.forEach((r) => r.activities.forEach((a) => acts.add(a)));
+  const memoCount = recs.filter((r) => r.memo.trim()).length;
+  return [
+    `[출결] 등원 ${attending}명 / 결석 ${absent}명`,
+    `[오전 활동] ${Array.from(acts).slice(0, 3).join(", ") || "실내 자유놀이"} — 유아들이 놀이를 스스로 선택하고 지속하는 모습이 관찰됨.`,
+    `[급식] 정상 배식. 알레르기 유아(달걀·견과류·우유) 대체식 제공 확인.`,
+    `[낮잠] 평균 1시간 20분. 개별 수면 습관에 따라 입면 시간 차이 있음.`,
+    `[특이사항] 관찰 메모 ${memoCount}건 기록. 또래 갈등 1건 발생하였으나 교사 중재로 원만히 해결되어 협동 놀이로 이어짐.`,
+  ].join("\n");
+}
+
+function planContent(): string {
+  return [
+    "[생활주제] 여름과 물놀이",
+    "[목표] 물의 성질을 오감으로 탐색하고, 여름철 건강·안전 습관을 기른다.",
+    "[월] 물놀이 준비 · 안전 약속 정하기",
+    "[화] 물감 번지기 — 색의 섞임 관찰",
+    "[수] 물놀이터 체험 (우천 시 실내 감각놀이)",
+    "[목] 젖은 모래 조형 놀이",
+    "[금] 여름 동화 「수박 수영장」 · 한 주 되돌아보기",
+  ].join("\n");
+}
+
+function evaluationContent(child: Child): string {
+  const obs = state.observations.filter((o) => o.childId === child.id);
+  const byDomain = DEV_DOMAINS.map(
+    (d) => [d, obs.filter((o) => o.tag === d).length] as const,
+  );
+  const strongest = [...byDomain].sort((a, b) => b[1] - a[1])[0][0];
+  return [
+    `[신체운동·건강] 대근육 발달이 또래 수준에 도달함. 계단 오르내리기·달리기에서 안정적인 신체 조절을 보임.`,
+    `[의사소통] 문장 표현이 풍부해지고, 자신의 요구를 말로 전달하는 빈도가 증가함.`,
+    `[사회관계] 갈등 상황에서 화해를 시도하는 등 또래 관계 조절 능력이 향상됨.`,
+    `[종합] 최근 관찰 ${obs.length}건 기준, ${strongest} 영역에서 특히 활발한 성장이 관찰됨. 가정에서도 관련 놀이 경험을 이어 가기를 권함.`,
+  ].join("\n");
+}
+
+// ---------- 시드 ----------
+
+function seedRecords(): Map<string, DailyRecord> {
+  const map = new Map<string, DailyRecord>();
+  CHILD_SEEDS.filter((c) => c.recorded).forEach((c, i) => {
+    map.set(recordKey(c.id, TODAY), {
+      childId: c.id,
+      date: TODAY,
+      activities:
+        i % 3 === 0
+          ? ["바깥놀이", "블록쌓기"]
+          : i % 3 === 1
+            ? ["그림그리기", "역할놀이"]
+            : ["바깥놀이", "동화듣기"],
+      lunch: i % 4 === 1 ? "조금 남김" : "다 먹음",
+      snack: i % 5 === 2 ? "조금 남김" : "다 먹음",
+      napFrom: "12:40",
+      napTo: i % 2 ? "14:10" : "14:00",
+      napQuality: i % 5 === 3 ? "뒤척였어요" : "잘 잤어요",
+      memo: MEMO_SEEDS[c.id] ?? "",
+      savedAt: `${TODAY}T13:3${i % 10}:00`,
+    });
+  });
+  return map;
+}
+
+const OBS_SEED: [string, string, DevelopmentDomain | null, string][] = [
+  ["c01", "07-16", "사회관계", "친구와 다툼 후 스스로 화해를 시도함"],
+  ["c01", "07-15", "신체운동", "계단 오르내리기가 능숙해짐"],
+  ["c01", "07-12", "의사소통", "완성된 문장으로 요구를 표현함"],
+  ["c01", "07-10", null, "새 놀잇감에 큰 흥미 — 태깅 실패, 수동 확인 필요"],
+  ["c01", "07-08", "자연탐구", "그림자 길이 변화를 스스로 발견함"],
+  ["c02", "07-16", "사회관계", "역할놀이에서 배역을 나누며 놀이를 이끎"],
+  ["c02", "07-11", "예술경험", "노래에 맞춰 새로운 율동을 만들어 냄"],
+  ["c02", "07-09", "의사소통", "동화 뒷이야기를 상상해 이야기함"],
+  ["c04", "07-15", "예술경험", "곡선 가위질로 형태 오리기에 성공함"],
+  ["c04", "07-10", "신체운동", "한 발 서기 10초 유지"],
+  ["c07", "07-16", "신체운동", "미끄럼틀 계단을 스스로 오르내림"],
+  ["c07", "07-13", "사회관계", "놀이 순서를 기다리는 모습이 안정적임"],
+  ["c09", "07-14", "자연탐구", "블록 탑의 균형 원리를 실험함"],
+  ["c10", "07-16", "사회관계", "새로 온 친구에게 먼저 다가가 놀이를 권함"],
+  ["c13", "07-15", "자연탐구", "개미 행렬을 오래 관찰하며 질문함"],
+];
+
+function seedObservations(): ObservationEntry[] {
+  return OBS_SEED.map(([childId, md, tag, memo], i) => ({
+    id: `o${String(i + 1).padStart(3, "0")}`,
+    childId,
+    date: `2026-${md}`,
+    tag,
+    manualTag: false,
+    memo,
+  }));
+}
+
+const PHOTO_ICONS = [
+  "🧒",
+  "🎨",
+  "🏃",
+  "🧩",
+  "🌳",
+  "🪁",
+  "📚",
+  "🎪",
+  "🧸",
+  "🌈",
+];
+
+function seedPhotos(): Photo[] {
+  const spec: [string | null, number | null, boolean][] = [
+    ["c01", 94, false],
+    ["c02", 91, false],
+    ["c01", 88, true],
+    ["c04", 86, false],
+    ["c07", 92, false],
+    ["c09", 89, false],
+    ["c12", 95, true],
+    ["c10", 87, false],
+    [null, null, false], // 분류 중
+    [null, null, false], // 분류 중
+    ["unmatched", null, false],
+    ["unmatched", null, false],
+  ];
+  return spec.map(([who, sim, sent], i) => ({
+    id: i + 1,
+    icon: PHOTO_ICONS[i % PHOTO_ICONS.length],
+    status:
+      who === null
+        ? "classifying"
+        : who === "unmatched"
+          ? "unmatched"
+          : "classified",
+    childId: who && who !== "unmatched" ? who : null,
+    similarity: sim,
+    takenAt: `${TODAY} ${10 + (i % 5)}:${String(12 + i * 3).padStart(2, "0")}`,
+    sent,
+  }));
+}
+
+const CONSULT_SEED: Omit<ConsultSession, "id">[] = [
+  {
+    childId: "c01",
+    date: "2026-07-16",
+    topic: "수면 습관",
+    transcript: [
+      {
+        speaker: "어머니",
+        text: "요즘 아이가 밤에 늦게 자서 아침에 일어나기 힘들어해요.",
+      },
+      {
+        speaker: "교사",
+        text: "낮잠 시간에도 잠들기까지 시간이 좀 걸리는 편이에요. 낮잠을 조금 줄여 볼까요?",
+      },
+      {
+        speaker: "어머니",
+        text: "네, 그리고 하원 시간을 30분 당길 수 있을까 해서요.",
+      },
+      {
+        speaker: "교사",
+        text: "네, 2주간 낮잠을 줄여 보고 변화를 지켜본 뒤 다시 말씀 나눠요.",
+      },
+    ],
+    summaryDraft:
+      "핵심 — 수면 습관 변화 상담 (야간 취침 지연 → 기상 어려움)\n요청사항 — 하원 시간 30분 조정, 낮잠 시간 단축 검토\n후속조치 — 2주간 낮잠 단축 시도 후 재상담 (7/30 예정)",
+    summaryFinal: null,
+    status: "draft",
+  },
+  {
+    childId: "c01",
+    date: "2026-05-20",
+    topic: "또래 관계",
+    transcript: [
+      { speaker: "어머니", text: "친구들과 잘 지내는지 궁금해서요." },
+      {
+        speaker: "교사",
+        text: "특정 친구와 놀이 시간이 길어지고 있고, 갈등 시 말로 해결하려는 시도가 늘었어요.",
+      },
+    ],
+    summaryDraft: "",
+    summaryFinal:
+      "핵심 — 또래 관계 적응 점검\n요청사항 — 갈등 상황 대처 방식 공유\n후속조치 — 가정에서도 감정 표현 어휘 사용 독려",
+    status: "confirmed",
+  },
+  {
+    childId: "c01",
+    date: "2026-03-11",
+    topic: "적응 상담",
+    transcript: [
+      { speaker: "어머니", text: "새 학기 적응이 걱정돼요." },
+      { speaker: "교사", text: "첫 주보다 등원 시 분리가 훨씬 안정적이에요." },
+    ],
+    summaryDraft: "",
+    summaryFinal:
+      "핵심 — 신학기 적응 상담\n요청사항 — 등원 시 분리불안 관찰 요청\n후속조치 — 2주 후 적응도 재공유",
+    status: "confirmed",
+  },
+  {
+    childId: "c02",
+    date: "2026-06-02",
+    topic: "식습관",
+    transcript: [
+      { speaker: "아버지", text: "집에서 채소를 잘 안 먹으려고 해요." },
+      {
+        speaker: "교사",
+        text: "원에서는 또래와 함께라 조금씩 시도하고 있어요. 같은 방식 공유드릴게요.",
+      },
+    ],
+    summaryDraft: "",
+    summaryFinal:
+      "핵심 — 채소 편식 상담\n요청사항 — 원 식사 지도 방식 공유\n후속조치 — 가정 연계 식판 스티커판 제공",
+    status: "confirmed",
+  },
+];
+
+function seedDocuments(): Map<string, DocumentDraft> {
+  const map = new Map<string, DocumentDraft>();
+  map.set(docKey("plan", null), {
+    type: "plan",
+    childId: null,
+    label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
+    content: planContent(),
+    working: planContent(),
+    status: "draft",
+    editDistance: null,
+    generatedAt: `${TODAY}T09:00:00`,
+  });
+  return map;
+}
+
+function createState(): DbState {
+  return {
+    children: CHILD_SEEDS.map((c, i) => ({
+      ...c,
+      color: AVATAR_COLORS[i % AVATAR_COLORS.length],
+    })),
+    records: seedRecords(),
+    documents: seedDocuments(),
+    photos: seedPhotos(),
+    photoSeq: 100,
+    observations: seedObservations(),
+    obsSeq: 100,
+    consults: CONSULT_SEED.map((c, i) => ({ ...c, id: `cs${i + 1}` })),
+    settings: {
+      replayMode: false,
+      models: { generate: "Sonnet 5", light: "Haiku 4.5" },
+    },
+  };
+}
+
+export let state = createState();
+
+export function reseed() {
+  state = createState();
+}
+
+// ---------- 조회·연산 ----------
+
+function todaysRecords(): DailyRecord[] {
+  return Array.from(state.records.values()).filter((r) => r.date === TODAY);
+}
+
+export function getChildren(): Child[] {
+  return state.children;
+}
+
+export function getChild(id: string): Child | undefined {
+  return state.children.find((c) => c.id === id);
+}
+
+export function getRecord(childId: string, date: string): DailyRecord | null {
+  return state.records.get(recordKey(childId, date)) ?? null;
+}
+
+export function saveRecord(input: DailyRecordInput): DailyRecord {
+  const rec: DailyRecord = { ...input, savedAt: new Date().toISOString() };
+  state.records.set(recordKey(input.childId, input.date), rec);
+  if (input.date === TODAY) {
+    const child = getChild(input.childId);
+    if (child) child.recorded = true;
+    // 원천 기록이 바뀌면 미확정 알림장 초안은 무효화 — 다음 조회 때 재생성
+    const key = docKey("notice", input.childId);
+    const doc = state.documents.get(key);
+    if (doc && doc.status === "draft") state.documents.delete(key);
+  }
+  return rec;
+}
+
+export function getSummary(): RecordSummary {
+  const done = state.children.filter((c) => c.recorded).length;
+  const pendingDocs = Array.from(state.documents.values()).filter(
+    (d) => d.type === "notice" && d.status === "draft",
+  ).length;
+  return {
+    done,
+    total: state.children.length,
+    pendingDocs,
+    unclassifiedPhotos: state.photos.filter((p) => p.status === "unmatched")
+      .length,
+  };
+}
+
+// ---------- 문서 ----------
+
+export function getDraft(
+  type: DocType,
+  childId: string | null,
+  regenerate = false,
+): DocumentDraft | null {
+  const key = docKey(type, childId);
+  const existing = state.documents.get(key);
+  if (existing && !regenerate) return existing;
+  if (existing && existing.status !== "draft") return existing; // 확정본은 재생성 불가
+
+  let content: string;
+  let label: string;
+  if (type === "notice") {
+    const child = childId ? getChild(childId) : undefined;
+    if (!child) return null;
+    const rec = getRecord(child.id, TODAY);
+    if (!rec) return null; // 하루 기록 없으면 생성 제외 (불변 원칙)
+    content = noticeContent(child, rec);
+    label = `${child.name} · ${TODAY} 알림장`;
+  } else if (type === "journal") {
+    content = journalContent();
+    label = `${CLASS_NAME} · ${TODAY} 보육일지`;
+  } else if (type === "plan") {
+    content = planContent();
+    label = `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`;
+  } else {
+    const child = childId ? getChild(childId) : undefined;
+    if (!child) return null;
+    content = evaluationContent(child);
+    label = `${child.name} · 2026 발달평가서`;
+  }
+  const doc: DocumentDraft = {
+    type,
+    childId: type === "notice" || type === "evaluation" ? childId : null,
+    label,
+    content,
+    working: content,
+    status: "draft",
+    editDistance: null,
+    generatedAt: new Date().toISOString(),
+  };
+  state.documents.set(key, doc);
+  return doc;
+}
+
+export function saveWorking(
+  type: DocType,
+  childId: string | null,
+  working: string,
+): boolean {
+  const doc = state.documents.get(docKey(type, childId));
+  if (!doc || doc.status !== "draft") return false;
+  doc.working = working;
+  return true;
+}
+
+/** 문자 단위 Levenshtein — 편집거리(%) 산출용 (내용이 짧아 O(nm) 무방) */
+function editRatio(a: string, b: string): number {
+  if (a === b) return 0;
+  const n = a.length;
+  const m = b.length;
+  if (!n || !m) return 100;
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i++) {
+    const cur = [i];
+    for (let j = 1; j <= m; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = cur;
+  }
+  return Math.min(100, Math.round((prev[m] / Math.max(n, m)) * 100));
+}
+
+export function confirmDoc(
+  type: DocType,
+  childId: string | null,
+  content: string,
+): DocumentDraft | null {
+  const doc = getDraft(type, childId);
+  if (!doc || doc.status !== "draft") return doc;
+  doc.working = content;
+  doc.editDistance = editRatio(doc.content, content);
+  doc.status = "confirmed";
+  return doc;
+}
+
+export function sendDoc(
+  type: DocType,
+  childId: string | null,
+): DocStatus | null {
+  const doc = state.documents.get(docKey(type, childId));
+  if (!doc || doc.status === "draft") return null; // 불변식: 확정 전 발송 불가
+  doc.status = "sent";
+  return doc.status;
+}
+
+export function getNoticeQueue(): NoticeQueue {
+  const items = state.children
+    .filter((c) => getRecord(c.id, TODAY))
+    .map((c) => {
+      const doc = state.documents.get(docKey("notice", c.id));
+      return {
+        childId: c.id,
+        name: c.name,
+        color: c.color,
+        status: (doc?.status ?? "draft") as DocStatus,
+      };
+    });
+  return {
+    generated: items.length,
+    total: state.children.length,
+    confirmed: items.filter((i) => i.status !== "draft").length,
+    sent: items.filter((i) => i.status === "sent").length,
+    queue: items,
+    excluded: state.children
+      .filter((c) => !getRecord(c.id, TODAY))
+      .map((c) => c.name),
+  };
+}
+
+// ---------- 사진함 ----------
+
+/** 조회할 때마다 분류 중인 사진 1장을 완료 처리 — 폴링과 함께 진행감을 만든다 */
+export function tickClassification() {
+  const next = state.photos.find((p) => p.status === "classifying");
+  if (!next) return;
+  const candidates = state.children.filter((c) => c.attending);
+  const child = candidates[next.id % candidates.length];
+  const sim = 85 + ((next.id * 7) % 13);
+  if (sim < 87) {
+    next.status = "unmatched";
+  } else {
+    next.status = "classified";
+    next.childId = child.id;
+    next.similarity = sim;
+  }
+}
+
+export function getPhotoInbox(): PhotoInbox {
+  const photos = [...state.photos].sort((a, b) => b.id - a.id);
+  return {
+    photos,
+    classified: photos.filter((p) => p.status === "classified").length,
+    classifying: photos.filter((p) => p.status === "classifying").length,
+    unmatched: photos.filter((p) => p.status === "unmatched").length,
+    total: photos.length,
+  };
+}
+
+export function uploadPhotos(count = 3): number {
+  for (let i = 0; i < count; i++) {
+    state.photoSeq += 1;
+    state.photos.push({
+      id: state.photoSeq,
+      icon: PHOTO_ICONS[state.photoSeq % PHOTO_ICONS.length],
+      status: "classifying",
+      childId: null,
+      similarity: null,
+      takenAt: `${TODAY} 15:${String(state.photoSeq % 60).padStart(2, "0")}`,
+      sent: false,
+    });
+  }
+  return count;
+}
+
+export function assignPhoto(photoId: number, childId: string): boolean {
+  const photo = state.photos.find((p) => p.id === photoId);
+  const child = getChild(childId);
+  if (!photo || !child) return false;
+  photo.status = "classified";
+  photo.childId = childId;
+  photo.similarity = null; // 수동 지정 — 유사도 대신 "수동" 표기
+  return true;
+}
+
+export function sendPhotos(ids: number[]): number {
+  let sent = 0;
+  ids.forEach((id) => {
+    const photo = state.photos.find(
+      (p) => p.id === id && p.status === "classified" && !p.sent,
+    );
+    if (photo) {
+      photo.sent = true;
+      sent += 1;
+    }
+  });
+  return sent;
+}
+
+// ---------- 관찰 ----------
+
+export function getObservations(childId: string): ObservationData {
+  const timeline = state.observations
+    .filter((o) => o.childId === childId)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  return {
+    domains: DEV_DOMAINS.map((name) => ({
+      name,
+      count: timeline.filter((o) => o.tag === name).length,
+    })),
+    timeline,
+  };
+}
+
+export function updateObservationTag(
+  id: string,
+  tag: DevelopmentDomain | null,
+): ObservationEntry | null {
+  const entry = state.observations.find((o) => o.id === id);
+  if (!entry) return null;
+  entry.tag = tag;
+  entry.manualTag = true;
+  return entry;
+}
+
+// ---------- 상담 ----------
+
+export function getConsults(childId: string): ConsultData {
+  const sessions = state.consults
+    .filter((c) => c.childId === childId)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  return {
+    current: sessions.find((s) => s.status === "draft") ?? sessions[0] ?? null,
+    history: sessions,
+  };
+}
+
+export function confirmConsult(id: string, summary: string): boolean {
+  const session = state.consults.find((c) => c.id === id);
+  if (!session || session.status !== "draft") return false;
+  session.summaryFinal = summary;
+  session.status = "confirmed";
+  return true;
+}
+
+// ---------- 평가제 체크리스트 (규칙엔진 — 조회 시 실데이터 재집계) ----------
+
+export function getChecklist(): ChecklistData {
+  const journal = state.documents.get(docKey("journal", null));
+  const plan = state.documents.get(docKey("plan", null));
+  const sentNotices = Array.from(state.documents.values()).filter(
+    (d) => d.type === "notice" && d.status === "sent",
+  ).length;
+  const recentObsChildIds = new Set(
+    state.observations
+      .filter((o) => o.date >= "2026-07-01")
+      .map((o) => o.childId),
+  );
+  const missingObservations = state.children
+    .filter((c) => !recentObsChildIds.has(c.id))
+    .map((c) => c.name);
+  const consultCount = state.consults.filter(
+    (c) => c.status === "confirmed" && c.date >= "2026-04-01",
+  ).length;
+
+  const items = [
+    {
+      id: "journal",
+      ok: !!journal && journal.status !== "draft",
+      title: "보육일지 작성 (주 5회)",
+      desc:
+        journal && journal.status !== "draft"
+          ? "이번 주 5/5 작성 · 오늘분 확정 완료"
+          : "오늘분 미확정 — 보육일지 화면에서 확정 필요",
+    },
+    {
+      id: "plan",
+      ok: !!plan,
+      title: "주간 계획안 비치",
+      desc: plan ? "이번 주 계획안 있음" : "이번 주 계획안 없음",
+    },
+    {
+      id: "notice",
+      ok: sentNotices > 0,
+      title: "알림장 발송 (일 단위)",
+      desc:
+        sentNotices > 0
+          ? `오늘 ${sentNotices}건 발송 · 최근 5일 연속 발송`
+          : "오늘 발송분 없음 — 알림장 확정 후 발송 필요",
+    },
+    {
+      id: "observation",
+      ok: missingObservations.length === 0,
+      title: "관찰기록 (아동별 월 1회)",
+      desc:
+        missingObservations.length === 0
+          ? "이번 달 전원 작성"
+          : `${missingObservations.length}명 미작성`,
+    },
+    {
+      id: "consult",
+      ok: consultCount > 0,
+      title: "상담일지 (분기 1회)",
+      desc:
+        consultCount > 0
+          ? `이번 분기 확정 상담 ${consultCount}건`
+          : "이번 분기 상담 기록 0건",
+    },
+  ];
+  return {
+    items,
+    met: items.filter((i) => i.ok).length,
+    total: items.length,
+    missingObservations,
+  };
+}
+
+// ---------- 지표 ----------
+
+export function getMetrics(): MetricsSummary {
+  const confirmed = Array.from(state.documents.values()).filter(
+    (d) => d.status !== "draft" && d.editDistance !== null,
+  );
+  const seededDone = 34; // 파일럿 기간 누적(시드) — 이번 세션 확정분을 더해 집계
+  const zeroEdits =
+    21 + confirmed.filter((d) => (d.editDistance ?? 100) === 0).length;
+  const minorEdits =
+    7 +
+    confirmed.filter((d) => {
+      const e = d.editDistance ?? 100;
+      return e > 0 && e <= 10;
+    }).length;
+  const totalDocs = seededDone + confirmed.length;
+  const adoptionRate = Math.round((zeroEdits / totalDocs) * 100);
+  const combinedRate = Math.round(((zeroEdits + minorEdits) / totalDocs) * 100);
+  return {
+    adoptionRate,
+    minorEditGainPt: combinedRate - adoptionRate,
+    combinedRate,
+    editDistribution: [zeroEdits, minorEdits, 4, 3, 2, 1],
+    timeSavings: [
+      {
+        docType: "알림장",
+        baseline: "7분 05초",
+        actual: "3분 20초",
+        reductionPct: 53,
+      },
+      {
+        docType: "보육일지",
+        baseline: "18분 00초",
+        actual: "7분 01초",
+        reductionPct: 61,
+      },
+      {
+        docType: "주간 계획안",
+        baseline: "45분 00초",
+        actual: "14분 24초",
+        reductionPct: 68,
+      },
+    ],
+    perDocTime: "3분 20초",
+    taggingMatchRate: Math.round(
+      (state.observations.filter((o) => !o.manualTag).length /
+        Math.max(1, state.observations.length)) *
+        100,
+    ),
+    monthlyCost: "월 3,540원",
+    dailyConfirmed: [
+      { date: "07-03", count: 9 },
+      { date: "07-04", count: 12 },
+      { date: "07-07", count: 14 },
+      { date: "07-08", count: 11 },
+      { date: "07-09", count: 15 },
+      { date: "07-10", count: 13 },
+      { date: "07-11", count: 16 },
+      { date: "07-14", count: 12 },
+      { date: "07-15", count: 15 },
+      { date: "07-16", count: Math.min(15, 10 + confirmed.length) },
+    ],
+  };
+}
+
+// ---------- 설정 ----------
+
+export function getSettings(): AppSettings {
+  return state.settings;
+}
+
+export function setReplayMode(on: boolean) {
+  state.settings.replayMode = on;
+}

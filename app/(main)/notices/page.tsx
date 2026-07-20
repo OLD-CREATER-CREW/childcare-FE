@@ -1,15 +1,45 @@
 "use client";
 
-import { useApp } from "@/lib/store";
-import { useNoticeQueue } from "@/lib/queries";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useDailyRecord, useNoticeQueue } from "@/lib/queries";
+import { TODAY } from "@/lib/constants";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
-import { Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
+import {
+  Avatar,
+  N,
+  Notice,
+  PageHead,
+  Progress,
+  Skeleton,
+  SpecBar,
+} from "@/components/ui";
+
+function statusLabel(status: string) {
+  if (status === "sent") return "발송됨";
+  if (status === "confirmed") return "확정됨";
+  return "검토 대기";
+}
 
 // SCR-004 알림장 검토·확정 — 생성만 일괄, 검토·확정은 아이별
-export default function NoticesPage() {
-  const { toast } = useApp();
+function NoticesContent() {
+  const params = useSearchParams();
   const queueQuery = useNoticeQueue();
   const queue = queueQuery.data;
+
+  const [childId, setChildId] = useState(params.get("child") ?? "");
+
+  // 선택이 없으면 첫 번째 검토 대기 아이를 자동 선택
+  useEffect(() => {
+    if (childId || !queue) return;
+    const firstDraft =
+      queue.queue.find((q) => q.status === "draft") ?? queue.queue[0];
+    if (firstDraft) setChildId(firstDraft.childId);
+  }, [queue, childId]);
+
+  const recordQuery = useDailyRecord(childId || "c01", TODAY);
+  const record = recordQuery.data?.record;
+  const selected = queue?.queue.find((q) => q.childId === childId);
 
   return (
     <>
@@ -28,86 +58,114 @@ export default function NoticesPage() {
         ]}
       />
 
-      <div className="card">
-        <h2>오늘 알림장 전체 만들기 · 해님반 15명</h2>
+      <div className="card mb-4">
+        <h2>
+          <N n={1} />
+          오늘 알림장 진행 현황
+        </h2>
         {queueQuery.isLoading || !queue ? (
           <Skeleton lines={3} />
         ) : (
           <>
-            <div className="inline gap-3">
+            <div className="inline gap-3.5">
               <div className="min-w-[200px] flex-1">
-                <div className="progress">
-                  <i
-                    style={{
-                      width: `${(queue.generated / queue.total) * 100}%`,
-                    }}
-                  />
-                </div>
+                <Progress value={queue.confirmed} max={queue.generated} />
               </div>
               <span className="text-[13px] font-bold">
-                {queue.generated}/{queue.total} 생성 완료
+                초안 {queue.generated}건 · 확정 {queue.confirmed}건 · 발송{" "}
+                {queue.sent}건
               </span>
             </div>
-            <div className="mt-3 text-[13px]">
-              검토 대기열 —{" "}
-              {queue.queue.map((item) =>
-                item.state === "reviewing" ? (
-                  <button key={item.childId} className="chip on mr-1 px-3 py-1">
-                    ● {item.name} 검토 중
-                  </button>
-                ) : (
-                  <button
-                    key={item.childId}
-                    className="chip mr-1 px-3 py-1"
-                    onClick={() =>
-                      toast(`${item.name} 알림장으로 이동합니다 (목데이터)`)
-                    }
+            <div className="mt-3.5 flex flex-wrap gap-2">
+              {queue.queue.map((item) => (
+                <button
+                  key={item.childId}
+                  className={`chip ${item.childId === childId ? "on" : ""}`}
+                  onClick={() => setChildId(item.childId)}
+                >
+                  <Avatar name={item.name} color={item.color} size="sm" />
+                  {item.name}
+                  <span
+                    className={`text-[11px] font-bold ${
+                      item.status === "sent"
+                        ? "text-confirm"
+                        : item.status === "confirmed"
+                          ? "text-blue"
+                          : "text-amber"
+                    }`}
                   >
-                    ○ {item.name} 검토하기
-                  </button>
-                ),
-              )}
+                    {statusLabel(item.status)}
+                  </span>
+                </button>
+              ))}
             </div>
-            <div className="mt-2.5">
-              <Notice kind="warn">
-                ⚠{" "}
-                <span>
-                  {queue.excluded.join(" · ")} — 하루 기록 없음(생성 제외).
-                  성공분은 그대로 유지됩니다.{" "}
-                  <b>일괄 확정 버튼은 제공하지 않습니다(불변 원칙).</b>
-                </span>
-              </Notice>
-            </div>
+            {queue.excluded.length > 0 && (
+              <div className="mt-3">
+                <Notice kind="warn">
+                  ⚠{" "}
+                  <span>
+                    {queue.excluded.join(" · ")} — 하루 기록 없음(생성 제외).
+                    성공분은 그대로 유지됩니다.{" "}
+                    <b>일괄 확정 버튼은 제공하지 않습니다(불변 원칙).</b>
+                  </span>
+                </Notice>
+              </div>
+            )}
           </>
         )}
       </div>
 
-      <DocumentWorkbench
-        type="notice"
-        allowSend
-        source={
-          <table className="tbl">
-            <tbody>
-              <tr>
-                <td className="w-[70px] text-muted">활동</td>
-                <td>바깥놀이, 블록쌓기</td>
-              </tr>
-              <tr>
-                <td className="text-muted">점심</td>
-                <td>다 먹음</td>
-              </tr>
-              <tr>
-                <td className="text-muted">낮잠</td>
-                <td>12:40 ~ 14:10 · 잘 잤어요</td>
-              </tr>
-              <tr>
-                <td className="text-muted">특이</td>
-                <td>장난감 다툼 → 금방 화해</td>
-              </tr>
-            </tbody>
-          </table>
-        }
-      />
+      {childId && (
+        <DocumentWorkbench
+          key={childId}
+          type="notice"
+          childId={childId}
+          allowSend
+          emptyMessage={`${selected?.name ?? "이 아이"}의 오늘 하루 기록이 없어 초안을 만들 수 없습니다. 하루 기록을 먼저 저장해 주세요.`}
+          source={
+            recordQuery.isLoading ? (
+              <Skeleton lines={4} />
+            ) : record ? (
+              <table className="tbl">
+                <tbody>
+                  <tr>
+                    <td className="w-[72px] text-muted">활동</td>
+                    <td>{record.activities.join(", ") || "—"}</td>
+                  </tr>
+                  <tr>
+                    <td className="text-muted">점심 · 간식</td>
+                    <td>
+                      {record.lunch} · {record.snack}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="text-muted">낮잠</td>
+                    <td>
+                      {record.napFrom} ~ {record.napTo} · {record.napQuality}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="text-muted">특이</td>
+                    <td>{record.memo || "—"}</td>
+                  </tr>
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-2 text-[13px] text-muted">
+                오늘 하루 기록이 없습니다.
+              </div>
+            )
+          }
+        />
+      )}
     </>
+  );
+}
+
+export default function NoticesPage() {
+  return (
+    <Suspense>
+      <NoticesContent />
+    </Suspense>
   );
 }
