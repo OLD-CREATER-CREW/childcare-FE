@@ -58,6 +58,12 @@ export const fetchDocumentDraft = (
 export const fetchNoticeQueue = () =>
   api.get<NoticeQueue>("/documents/notices/queue");
 
+// EP-011 — 기록 있는 아이 전원 초안 일괄 생성
+export const generateAllNotices = () =>
+  api.post<{ created: number; total: number }>(
+    "/documents/notices/generate-all",
+  );
+
 // EP-013
 export const saveWorkingCopy = (
   type: DocType,
@@ -101,6 +107,13 @@ export const updateObservationTag = (
   tag: DevelopmentDomain | null,
 ) => api.post<ObservationEntry>("/observations/tag", { id, tag });
 
+// EP-020 — 관찰 기록 직접 추가
+export const addObservation = (
+  childId: string,
+  tag: DevelopmentDomain | null,
+  memo: string,
+) => api.post<ObservationEntry>("/observations", { childId, tag, memo });
+
 // EP-024 · EP-006
 export const fetchConsults = (childId: string) =>
   api.get<ConsultData>(`/consults?child=${childId}`);
@@ -114,6 +127,10 @@ export const fetchChecklist = () => api.get<ChecklistData>("/checklist");
 
 // EP-028
 export const fetchMetrics = () => api.get<MetricsSummary>("/metrics/summary");
+
+// EP-032 — 로컬 양식(서식) 동기화: 노트북 폴더에서 읽은 서식을 백엔드에 반영
+export const syncTemplates = (templates: Partial<Record<DocType, string>>) =>
+  api.post<{ ok: boolean; applied: string[] }>("/templates", { templates });
 
 // EP-029 ~ EP-031
 export const fetchSettings = () => api.get<AppSettings>("/settings");

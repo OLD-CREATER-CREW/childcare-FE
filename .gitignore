@@ -21,6 +21,9 @@ settings.local.json
 .omc/
 docs/pilot-metrics/
 
+# 산출물 스펙 문서 (로컬 참고용 — 커밋 대상 아님)
+docs/spec/
+
 # misc
 .DS_Store
 *.log

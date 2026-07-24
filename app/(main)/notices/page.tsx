@@ -2,7 +2,13 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useDailyRecord, useNoticeQueue } from "@/lib/queries";
+import { Sparkles } from "lucide-react";
+import { useApp } from "@/lib/store";
+import {
+  useDailyRecord,
+  useGenerateAllNotices,
+  useNoticeQueue,
+} from "@/lib/queries";
 import { TODAY } from "@/lib/constants";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import {
@@ -24,8 +30,20 @@ function statusLabel(status: string) {
 // SCR-004 알림장 검토·확정 — 생성만 일괄, 검토·확정은 아이별
 function NoticesContent() {
   const params = useSearchParams();
+  const { toast } = useApp();
   const queueQuery = useNoticeQueue();
+  const generateAll = useGenerateAllNotices();
   const queue = queueQuery.data;
+
+  const runGenerateAll = () =>
+    generateAll.mutate(undefined, {
+      onSuccess: ({ created, total }) =>
+        toast(
+          created > 0
+            ? `초안 ${created}건을 한 번에 생성했습니다 (기록 있는 ${total}명 기준)`
+            : `이미 ${total}명 초안이 모두 준비돼 있습니다`,
+        ),
+    });
 
   const [childId, setChildId] = useState(params.get("child") ?? "");
 
@@ -62,6 +80,14 @@ function NoticesContent() {
         <h2>
           <N n={1} />
           오늘 알림장 진행 현황
+          <button
+            className="btn primary ml-auto px-3 py-1.5"
+            onClick={runGenerateAll}
+            disabled={generateAll.isPending || !queue || queue.generated === 0}
+          >
+            <Sparkles size={14} />
+            {generateAll.isPending ? "생성 중…" : "전체 생성"}
+          </button>
         </h2>
         {queueQuery.isLoading || !queue ? (
           <Skeleton lines={3} />

@@ -19,6 +19,7 @@ import type {
   RecordSummary,
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
+import { applyTemplate } from "@/lib/templates";
 
 /**
  * 상태형 인메모리 DB — MSW 핸들러의 유일한 데이터 소스.
@@ -220,6 +221,8 @@ type DbState = {
   obsSeq: number;
   consults: ConsultSession[];
   settings: AppSettings;
+  /** 로컬 양식(서식) — 지정되면 해당 문서 초안이 이 서식으로 생성된다 */
+  templates: Partial<Record<DocType, string>>;
 };
 
 function recordKey(childId: string, date: string) {
@@ -238,20 +241,51 @@ const josa = (name: string, a: string, b: string) => {
   return hasJong ? a : b;
 };
 
+/** 낮잠 시작~종료(HH:MM) 분 단위 계산 */
+function napMinutes(rec: DailyRecord): number {
+  return (
+    (Number(rec.napTo.slice(0, 2)) * 60 +
+      Number(rec.napTo.slice(3)) -
+      (Number(rec.napFrom.slice(0, 2)) * 60 + Number(rec.napFrom.slice(3)))) |
+    0
+  );
+}
+
 function noticeContent(child: Child, rec: DailyRecord): string {
   const first = child.name.slice(1) || child.name;
   const acts = rec.activities.length
     ? rec.activities.join(", ")
     : "실내 자유놀이";
+  const napMin = napMinutes(rec);
+
+  // 로컬 양식이 지정돼 있으면 그 서식대로 — 없으면 기본 내장 문장
+  const tpl = state.templates.notice;
+  if (tpl) {
+    const napText =
+      `${Math.floor(napMin / 60) ? `${Math.floor(napMin / 60)}시간 ` : ""}${napMin % 60 ? `${napMin % 60}분` : ""}`.trim();
+    return applyTemplate(tpl, {
+      이름: child.name,
+      이름_짧게: first,
+      반: CLASS_NAME,
+      날짜: TODAY,
+      선생님: TEACHER_NAME,
+      보호자: child.guardian,
+      활동: acts,
+      점심: rec.lunch,
+      간식: rec.snack,
+      낮잠시작: rec.napFrom,
+      낮잠종료: rec.napTo,
+      낮잠시간: napText,
+      낮잠상태: rec.napQuality,
+      메모: rec.memo,
+      알레르기: child.allergy ?? "없음",
+    });
+  }
+
   const lunchLine =
     rec.lunch === "다 먹음"
       ? "점심도 남김없이 잘 먹었고"
       : `점심은 ${rec.lunch} 상태였고`;
-  const napMin =
-    (Number(rec.napTo.slice(0, 2)) * 60 +
-      Number(rec.napTo.slice(3)) -
-      (Number(rec.napFrom.slice(0, 2)) * 60 + Number(rec.napFrom.slice(3)))) |
-    0;
   const napLine =
     rec.napQuality === "잘 잤어요"
       ? `낮잠도 ${Math.floor(napMin / 60) ? `${Math.floor(napMin / 60)}시간 ` : ""}${napMin % 60 ? `${napMin % 60}분 ` : ""}동안 푹 잤답니다`
@@ -267,6 +301,21 @@ function journalContent(): string {
   const acts = new Set<string>();
   recs.forEach((r) => r.activities.forEach((a) => acts.add(a)));
   const memoCount = recs.filter((r) => r.memo.trim()).length;
+  const actList = Array.from(acts).slice(0, 3).join(", ") || "실내 자유놀이";
+
+  const tpl = state.templates.journal;
+  if (tpl) {
+    return applyTemplate(tpl, {
+      반: CLASS_NAME,
+      날짜: TODAY,
+      선생님: TEACHER_NAME,
+      등원: attending,
+      결석: absent,
+      활동: actList,
+      관찰메모수: memoCount,
+    });
+  }
+
   return [
     `[출결] 등원 ${attending}명 / 결석 ${absent}명`,
     `[오전 활동] ${Array.from(acts).slice(0, 3).join(", ") || "실내 자유놀이"} — 유아들이 놀이를 스스로 선택하고 지속하는 모습이 관찰됨.`,
@@ -277,6 +326,15 @@ function journalContent(): string {
 }
 
 function planContent(): string {
+  const tpl = state.templates.plan;
+  if (tpl) {
+    return applyTemplate(tpl, {
+      반: CLASS_NAME,
+      선생님: TEACHER_NAME,
+      기간: "2026-07-13 ~ 07-19",
+      생활주제: "여름과 물놀이",
+    });
+  }
   return [
     "[생활주제] 여름과 물놀이",
     "[목표] 물의 성질을 오감으로 탐색하고, 여름철 건강·안전 습관을 기른다.",
@@ -294,6 +352,19 @@ function evaluationContent(child: Child): string {
     (d) => [d, obs.filter((o) => o.tag === d).length] as const,
   );
   const strongest = [...byDomain].sort((a, b) => b[1] - a[1])[0][0];
+
+  const tpl = state.templates.evaluation;
+  if (tpl) {
+    return applyTemplate(tpl, {
+      이름: child.name,
+      생년월일: child.birthDate,
+      반: CLASS_NAME,
+      선생님: TEACHER_NAME,
+      관찰수: obs.length,
+      최다영역: strongest,
+    });
+  }
+
   return [
     `[신체운동·건강] 대근육 발달이 또래 수준에 도달함. 계단 오르내리기·달리기에서 안정적인 신체 조절을 보임.`,
     `[의사소통] 문장 표현이 풍부해지고, 자신의 요구를 말로 전달하는 빈도가 증가함.`,
@@ -476,9 +547,13 @@ const CONSULT_SEED: Omit<ConsultSession, "id">[] = [
   },
 ];
 
-function seedDocuments(): Map<string, DocumentDraft> {
-  const map = new Map<string, DocumentDraft>();
-  map.set(docKey("plan", null), {
+/**
+ * 주간 계획안 초안을 시드로 심는다.
+ * planContent()가 state.templates를 읽으므로, 반드시 state가 할당된 뒤에 호출해야 한다
+ * (createState 안에서 부르면 `export let state` 초기화 전 접근 → TDZ 오류).
+ */
+function seedDocuments() {
+  state.documents.set(docKey("plan", null), {
     type: "plan",
     childId: null,
     label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
@@ -488,7 +563,6 @@ function seedDocuments(): Map<string, DocumentDraft> {
     editDistance: null,
     generatedAt: `${TODAY}T09:00:00`,
   });
-  return map;
 }
 
 function createState(): DbState {
@@ -498,7 +572,7 @@ function createState(): DbState {
       color: AVATAR_COLORS[i % AVATAR_COLORS.length],
     })),
     records: seedRecords(),
-    documents: seedDocuments(),
+    documents: new Map(),
     photos: seedPhotos(),
     photoSeq: 100,
     observations: seedObservations(),
@@ -508,13 +582,28 @@ function createState(): DbState {
       replayMode: false,
       models: { generate: "Sonnet 5", light: "Haiku 4.5" },
     },
+    templates: {},
   };
 }
 
 export let state = createState();
+seedDocuments();
 
 export function reseed() {
+  // 양식은 기관 설정이지 연습 데이터가 아니므로 시드 초기화에도 보존한다
+  const templates = state.templates;
   state = createState();
+  state.templates = templates;
+  seedDocuments();
+}
+
+/** 로컬에서 읽어 온 양식을 반영 — 이후 생성되는 미확정 초안이 이 서식을 따른다 */
+export function setTemplates(map: Partial<Record<DocType, string>>) {
+  state.templates = map ?? {};
+  // 아직 미확정인 초안은 새 서식으로 다시 생성되도록 폐기(확정본은 보존)
+  Array.from(state.documents.entries()).forEach(([key, doc]) => {
+    if (doc.status === "draft") state.documents.delete(key);
+  });
 }
 
 // ---------- 조회·연산 ----------
@@ -689,6 +778,22 @@ export function getNoticeQueue(): NoticeQueue {
   };
 }
 
+/**
+ * 알림장 초안 일괄 생성 — 오늘 하루 기록이 있는 아이 전원의 초안을 한 번에 파생.
+ * 이미 존재하는 초안·확정본은 건드리지 않고(불변 원칙), 새로 만든 건수만 반환.
+ * "생성만 일괄, 검토·확정은 아이별" — 확정은 이 함수가 하지 않는다.
+ */
+export function generateAllNotices(): { created: number; total: number } {
+  let created = 0;
+  const withRecord = state.children.filter((c) => getRecord(c.id, TODAY));
+  withRecord.forEach((c) => {
+    const existing = state.documents.get(docKey("notice", c.id));
+    if (existing) return; // 이미 생성됨(초안이든 확정이든) — 유지
+    if (getDraft("notice", c.id)) created += 1;
+  });
+  return { created, total: withRecord.length };
+}
+
 // ---------- 사진함 ----------
 
 /** 조회할 때마다 분류 중인 사진 1장을 완료 처리 — 폴링과 함께 진행감을 만든다 */
@@ -781,6 +886,30 @@ export function updateObservationTag(
   if (!entry) return null;
   entry.tag = tag;
   entry.manualTag = true;
+  return entry;
+}
+
+/**
+ * 관찰 기록 직접 추가 — 교사가 하루 기록 유입과 별개로 직접 남기는 관찰.
+ * 발달영역을 지정하면 수동 태그(manualTag)로 박제되어 자동 태깅이 덮어쓰지 않는다.
+ */
+export function addObservation(
+  childId: string,
+  tag: DevelopmentDomain | null,
+  memo: string,
+): ObservationEntry | null {
+  const child = getChild(childId);
+  if (!child || !memo.trim()) return null;
+  state.obsSeq += 1;
+  const entry: ObservationEntry = {
+    id: `o${state.obsSeq}`,
+    childId,
+    date: TODAY,
+    tag,
+    manualTag: tag !== null,
+    memo: memo.trim(),
+  };
+  state.observations.push(entry);
   return entry;
 }
 

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { PencilLine, TrendingUp } from "lucide-react";
+import { PencilLine, Plus, TrendingUp } from "lucide-react";
 import { useApp } from "@/lib/store";
 import {
+  useAddObservation,
   useChildren,
   useObservations,
   useUpdateObservationTag,
@@ -18,6 +19,7 @@ import {
   Skeleton,
   SpecBar,
 } from "@/components/ui";
+import { TODAY } from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
 import type { ObservationEntry } from "@/lib/types";
 
@@ -28,8 +30,14 @@ export default function ObservationsPage() {
   const [childId, setChildId] = useState("c01");
   const obsQuery = useObservations(childId);
   const tagMutation = useUpdateObservationTag();
+  const addMutation = useAddObservation();
 
   const [editTarget, setEditTarget] = useState<ObservationEntry | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newMemo, setNewMemo] = useState("");
+  const [newTag, setNewTag] = useState<(typeof DEV_DOMAINS)[number] | null>(
+    null,
+  );
 
   const kids = childrenQuery.data ?? [];
   const child = kids.find((c) => c.id === childId);
@@ -46,6 +54,29 @@ export default function ObservationsPage() {
         onSuccess: () => {
           toast("수동 태그로 저장 — 이후 자동 태깅이 덮어쓰지 않습니다");
           setEditTarget(null);
+        },
+      },
+    );
+  };
+
+  const openAdd = () => {
+    setNewMemo("");
+    setNewTag(null);
+    setAddOpen(true);
+  };
+
+  const submitAdd = () => {
+    if (!newMemo.trim()) return;
+    addMutation.mutate(
+      { childId, tag: newTag, memo: newMemo },
+      {
+        onSuccess: () => {
+          toast(
+            newTag
+              ? `관찰 기록을 추가했습니다 — ${newTag} 수동 태그로 저장`
+              : "관찰 기록을 추가했습니다 — 태그는 나중에 달 수 있어요",
+          );
+          setAddOpen(false);
         },
       },
     );
@@ -138,6 +169,9 @@ export default function ObservationsPage() {
             <N n={3} />
             메모 누적 타임라인
             <span className="hint">태그 없는 메모는 수동 태깅으로 보완</span>
+            <button className="btn ghost ml-auto px-2.5 py-1" onClick={openAdd}>
+              <Plus size={14} /> 관찰 추가
+            </button>
           </h2>
           {obsQuery.isLoading ? (
             <Skeleton lines={4} />
@@ -173,6 +207,55 @@ export default function ObservationsPage() {
           )}
         </div>
       </div>
+
+      <Modal
+        open={addOpen}
+        label="관찰 기록 추가"
+        onClose={() => setAddOpen(false)}
+      >
+        <h3>관찰 기록 추가</h3>
+        <div className="desc">
+          {child?.name ?? "이 아이"} · {TODAY} — 관찰한 내용을 직접 남깁니다.
+          발달영역은 선택 사항이며, 지정하면 수동 태그로 박제됩니다.
+        </div>
+        <div className="field mt-4">
+          <label>관찰 메모</label>
+          <textarea
+            className="input min-h-[92px] resize-y"
+            value={newMemo}
+            onChange={(e) => setNewMemo(e.target.value)}
+            placeholder="예) 블록으로 다리를 만들며 친구에게 만드는 방법을 설명함"
+            aria-label="관찰 메모"
+          />
+        </div>
+        <div className="field">
+          <label>발달영역 (선택)</label>
+          <div className="chiprow">
+            {DEV_DOMAINS.map((d) => (
+              <button
+                key={d}
+                className={`chip ${newTag === d ? "on" : ""}`}
+                onClick={() => setNewTag(newTag === d ? null : d)}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="btnrow mt-4">
+          <button
+            className="btn primary"
+            onClick={submitAdd}
+            disabled={!newMemo.trim() || addMutation.isPending}
+          >
+            <Plus size={14} />
+            {addMutation.isPending ? "저장 중…" : "관찰 추가"}
+          </button>
+          <button className="btn" onClick={() => setAddOpen(false)}>
+            취소
+          </button>
+        </div>
+      </Modal>
 
       <Modal
         open={editTarget !== null}

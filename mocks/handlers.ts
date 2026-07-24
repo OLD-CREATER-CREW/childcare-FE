@@ -2,6 +2,8 @@ import { http, HttpResponse, delay } from "msw";
 import * as db from "@/mocks/db";
 import type { DailyRecordInput, DevelopmentDomain, DocType } from "@/lib/types";
 
+type TemplateMap = Partial<Record<DocType, string>>;
+
 /**
  * MSW 핸들러 — 상태형 DB(mocks/db.ts) 위에서 실제 API처럼 동작합니다.
  * 백엔드가 준비되면 NEXT_PUBLIC_USE_MOCK=false로 끄고 실제 API를 호출합니다.
@@ -70,6 +72,12 @@ export const handlers = [
   http.get("/api/documents/notices/queue", async () => {
     await delay(250);
     return HttpResponse.json(db.getNoticeQueue());
+  }),
+
+  // EP-011 알림장 초안 일괄 생성 — 기록 있는 아이 전원 파생 (확정은 아이별)
+  http.post("/api/documents/notices/generate-all", async () => {
+    await delay(900);
+    return HttpResponse.json(db.generateAllNotices());
   }),
 
   // EP-013 작업본 저장 (디바운스 자동 저장)
@@ -163,6 +171,19 @@ export const handlers = [
     return HttpResponse.json(entry);
   }),
 
+  // EP-020 관찰 기록 직접 추가 — 교사 직접 입력 (태그 선택 시 수동 태그 박제)
+  http.post("/api/observations", async ({ request }) => {
+    await delay(350);
+    const { childId, tag, memo } = (await request.json()) as {
+      childId: string;
+      tag: DevelopmentDomain | null;
+      memo: string;
+    };
+    const entry = db.addObservation(childId, tag, memo);
+    if (!entry) return new HttpResponse(null, { status: 400 });
+    return HttpResponse.json(entry);
+  }),
+
   // EP-024 · EP-006 상담 조회
   http.get("/api/consults", async ({ request }) => {
     await delay(300);
@@ -207,5 +228,16 @@ export const handlers = [
     await delay(700);
     db.reseed();
     return HttpResponse.json({ ok: true });
+  }),
+
+  // EP-032 로컬 양식 동기화 — 렌더러가 노트북 폴더에서 읽은 서식을 반영
+  http.post("/api/templates", async ({ request }) => {
+    await delay(150);
+    const { templates } = (await request.json()) as { templates: TemplateMap };
+    db.setTemplates(templates ?? {});
+    return HttpResponse.json({
+      ok: true,
+      applied: Object.keys(templates ?? {}),
+    });
   }),
 ];

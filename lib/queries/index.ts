@@ -224,6 +224,38 @@ export const useUpdateObservationTag = () => {
   });
 };
 
+export const useAddObservation = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      childId,
+      tag,
+      memo,
+    }: {
+      childId: string;
+      tag: DevelopmentDomain | null;
+      memo: string;
+    }) => apiFn.addObservation(childId, tag, memo),
+    onSuccess: () => {
+      // 관찰이 늘면 발달평가서 원료·태깅률·체크리스트가 함께 움직인다
+      qc.invalidateQueries({ queryKey: ["observations"] });
+      qc.invalidateQueries({ queryKey: queryKeys.metrics });
+      qc.invalidateQueries({ queryKey: queryKeys.checklist });
+    },
+  });
+};
+
+export const useGenerateAllNotices = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: apiFn.generateAllNotices,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
+      qc.invalidateQueries({ queryKey: ["documents", "draft", "notice"] });
+    },
+  });
+};
+
 export const useConfirmConsult = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -238,6 +270,19 @@ export const useConfirmConsult = () => {
 
 export const useSetReplayMode = () =>
   useMutation({ mutationFn: (on: boolean) => apiFn.setReplayMode(on) });
+
+export const useSyncTemplates = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (templates: Partial<Record<DocType, string>>) =>
+      apiFn.syncTemplates(templates),
+    onSuccess: () => {
+      // 서식이 바뀌면 미확정 초안이 새 서식으로 다시 생성돼야 한다
+      qc.invalidateQueries({ queryKey: ["documents", "draft"] });
+      qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
+    },
+  });
+};
 
 export const useReloadSeed = () => {
   const qc = useQueryClient();
