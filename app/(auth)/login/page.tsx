@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Sprout } from "lucide-react";
 import { useApp } from "@/lib/store";
@@ -11,10 +11,15 @@ import { N, Notice, SpecBar, Toast } from "@/components/ui";
 // SCR-001 로그인 — 셸 밖의 단독 화면. "실제 아동 정보 입력 금지" 상시 고지(REQ-NF-007)
 export default function LoginPage() {
   const router = useRouter();
-  const { toast } = useApp();
+  const { toast, auth, authReady, signIn } = useApp();
   const loginMutation = useLogin();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+
+  // 이미 로그인된 세션이면 로그인 화면을 건너뛴다
+  useEffect(() => {
+    if (authReady && auth) router.replace("/");
+  }, [authReady, auth, router]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,8 +27,9 @@ export default function LoginPage() {
       { username, password },
       {
         onSuccess: ({ teacher }) => {
+          signIn(teacher);
           toast(`${teacher.name}, 환영합니다`);
-          router.push("/");
+          router.replace("/");
         },
       },
     );

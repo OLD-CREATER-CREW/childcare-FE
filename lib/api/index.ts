@@ -137,6 +137,13 @@ export const login = async (_input: LoginInput): Promise<LoginResponse> => {
   };
 };
 
+// ---------- 로그아웃 (EP-002) ----------
+
+export const logout = async (): Promise<{ ok: boolean }> => {
+  await api.post("/auth/logout");
+  return { ok: true };
+};
+
 // ---------- 아동 (EP-004) ----------
 
 export const fetchChildren = async (): Promise<Child[]> => {

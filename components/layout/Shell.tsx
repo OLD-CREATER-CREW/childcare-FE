@@ -11,7 +11,7 @@ import {
   Camera,
   CheckSquare,
   Home,
-  KeyRound,
+  LogOut,
   Mail,
   Menu,
   Mic,
@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
-import { useRecordSummary } from "@/lib/queries";
+import { useLogout, useRecordSummary } from "@/lib/queries";
 import { Toast } from "@/components/ui";
 
 type NavItem = {
@@ -106,9 +106,23 @@ const BOTTOM_TABS = [
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
-  const { replay, annot, setAnnot } = useApp();
+  const { replay, annot, setAnnot, auth, signOut } = useApp();
+  const logoutMutation = useLogout();
   const [open, setOpen] = useState(false);
   const summaryQuery = useRecordSummary();
+
+  const teacherName = auth?.name ?? TEACHER_NAME;
+  const teacherRole = auth?.role ?? "담임";
+
+  // 로그아웃 — 서버 세션 종료를 시도하되, 성공 여부와 무관하게 클라이언트 세션을
+  // 비우고 로그인 화면으로 돌려보낸다(데모에서 항상 닫히는 루프).
+  const doLogout = () =>
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        signOut();
+        router.replace("/login");
+      },
+    });
 
   const pendingDocs = summaryQuery.data?.pendingDocs ?? 0;
   const unclassified = summaryQuery.data?.unclassifiedPhotos ?? 0;
@@ -159,9 +173,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             style={{ background: "var(--green)" }}
             aria-hidden
           >
-            {TEACHER_NAME.slice(0, 1)}
+            {teacherName.slice(0, 1)}
           </span>
-          <span className="name">{TEACHER_NAME} · 담임</span>
+          <span className="name">
+            {teacherName} · {teacherRole}
+          </span>
         </div>
       </header>
 
@@ -188,11 +204,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </div>
         ))}
         <div className="mt-auto">
-          <div className="nav-group">진입</div>
-          <Link href="/login" className="nav-item">
-            <KeyRound size={17} className="ico w-5 flex-none" /> 로그인
+          <div className="nav-group">계정</div>
+          <button
+            type="button"
+            className="nav-item w-full text-left"
+            onClick={doLogout}
+            disabled={logoutMutation.isPending}
+          >
+            <LogOut size={17} className="ico w-5 flex-none" />
+            {logoutMutation.isPending ? "로그아웃 중…" : "로그아웃"}
             <span className="nav-scr">001</span>
-          </Link>
+          </button>
         </div>
       </nav>
 

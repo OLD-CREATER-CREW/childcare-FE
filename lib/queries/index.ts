@@ -106,6 +106,15 @@ export const useMetrics = () =>
 export const useLogin = () =>
   useMutation({ mutationFn: (input: LoginInput) => apiFn.login(input) });
 
+export const useLogout = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: apiFn.logout,
+    // 다른 계정으로 다시 로그인해도 이전 세션의 서버 캐시가 남지 않도록 비운다
+    onSettled: () => qc.clear(),
+  });
+};
+
 export const useSaveDailyRecord = () => {
   const qc = useQueryClient();
   return useMutation({
