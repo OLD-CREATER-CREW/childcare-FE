@@ -368,6 +368,13 @@ export const sendPhotos = async (ids: number[]): Promise<{ sent: number }> => {
   return { sent: res.sent.length };
 };
 
+// 서버 다중 발달영역 태그 → UI 도메인 배열(빈/미매핑 제거). 매트릭스와 리스트가
+// 어긋나지 않도록 관찰 기록의 태그는 전체를 보존한다.
+const domainsFromSpec = (specTags: SpecDomain[] = []): DevelopmentDomain[] =>
+  specTags
+    .map((t) => domainFromSpec(t))
+    .filter((t): t is DevelopmentDomain => t != null);
+
 // ---------- 관찰 (EP-005 조회 / EP-009 태그 / 관찰 직접 추가) ----------
 
 export const fetchObservations = async (
@@ -386,6 +393,7 @@ export const fetchObservations = async (
       childId,
       date: o.date,
       tag: domainFromSpec(o.dev_domain_tags[0]),
+      tags: domainsFromSpec(o.dev_domain_tags),
       manualTag: o.tags_edited,
       memo: o.note,
     })),
@@ -409,6 +417,7 @@ export const updateObservationTag = async (
     childId: "",
     date: TODAY,
     tag: domainFromSpec(res.dev_domain_tags[0]),
+    tags: domainsFromSpec(res.dev_domain_tags),
     manualTag: res.tags_edited,
     memo: "",
   };
@@ -418,17 +427,31 @@ export const updateObservationTag = async (
 // 없으므로(POST /children/{id}/observations → 405) 하루 기록을 만든다. 서버가
 // note로 발달영역을 자동 태깅하므로, 교사가 태그를 직접 골랐다면 기록 생성 후
 // EP-009로 그 태그를 덮어써 수동 태그(tags_edited)로 박제한다.
+//
+// ⚠️ POST /records는 (child_id, date) 풀 업서트라, 부분 필드만 보내면 기존
+// activity·meal·nap이 null로 덮여 그날 하루 기록이 파괴된다. 따라서 먼저 같은
+// 날짜의 기존 기록을 조회해 병합한 뒤 전체 레코드를 보낸다(데이터 손실 방지).
 export const addObservation = async (
   childId: string,
   tag: DevelopmentDomain | null,
   memo: string,
 ): Promise<ObservationEntry> => {
   const specTag = tag ? domainToSpec(tag) : null;
+  const cid = childIdToInt(childId);
+  const existing = (
+    await api.get<ListEnvelope<SpecRecord>>(
+      `/records?child_id=${cid}&date=${TODAY}`,
+    )
+  ).items[0];
   const rec = await api.post<SpecRecord>("/records", {
-    child_id: childIdToInt(childId),
+    child_id: cid,
     date: TODAY,
+    // 하루 기록 필드는 기존 값을 보존한다(관찰 추가가 덮어쓰지 않도록)
+    activity: existing?.activity ?? "",
+    meal: existing?.meal ?? "",
+    nap: existing?.nap ?? "",
     note: memo,
-    dev_domain_tags: specTag ? [specTag] : [],
+    dev_domain_tags: specTag ? [specTag] : (existing?.dev_domain_tags ?? []),
   });
   let tags: SpecDomain[] = rec.dev_domain_tags ?? [];
   let edited = rec.tags_edited ?? false;
@@ -446,6 +469,7 @@ export const addObservation = async (
     childId,
     date: rec.date,
     tag: domainFromSpec(tags[0]),
+    tags: domainsFromSpec(tags),
     manualTag: edited,
     memo: rec.note ?? memo,
   };

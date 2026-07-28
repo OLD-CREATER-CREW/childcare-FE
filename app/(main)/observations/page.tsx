@@ -184,10 +184,19 @@ export default function ObservationsPage() {
               {obsQuery.data?.timeline.map((r) => (
                 <div key={r.id} className="row">
                   <span className="date">{r.date.slice(5)}</span>{" "}
-                  {r.tag ? (
-                    <span className={`tag ${r.manualTag ? "manual" : "dom"}`}>
-                      {r.tag}
-                      {r.manualTag && " ✎"}
+                  {r.tags.length ? (
+                    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+                      {r.tags.map((t) => (
+                        <span
+                          key={t}
+                          className={`tag ${r.manualTag ? "manual" : "dom"}`}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                      {r.manualTag && (
+                        <span className="text-[11px] text-muted">✎</span>
+                      )}
                     </span>
                   ) : (
                     <span className="tag daily">태그 없음</span>

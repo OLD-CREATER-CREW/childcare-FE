@@ -429,6 +429,7 @@ function seedObservations(): ObservationEntry[] {
     childId,
     date: `2026-${md}`,
     tag,
+    tags: tag ? [tag] : [],
     manualTag: false,
     memo,
   }));
@@ -914,6 +915,7 @@ export function addObservation(
     childId,
     date: TODAY,
     tag,
+    tags: tag ? [tag] : [],
     manualTag: tag !== null,
     memo: memo.trim(),
   };
