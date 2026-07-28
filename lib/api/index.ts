@@ -30,7 +30,6 @@ import type {
   SpecPhotoList,
   SpecRecord,
   SpecSettings,
-  SpecUser,
 } from "@/lib/api/spec";
 import { TODAY } from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
@@ -74,10 +73,9 @@ const AVATAR_COLORS = [
 ];
 
 const colorFor = (childIdInt: number) => {
-  const idx = childIdInt - 101;
-  return AVATAR_COLORS[
-    ((idx % AVATAR_COLORS.length) + AVATAR_COLORS.length) % AVATAR_COLORS.length
-  ];
+  // child_id 정수로 팔레트를 결정적으로 고른다(값 범위 무관, 음수 방어 포함).
+  const len = AVATAR_COLORS.length;
+  return AVATAR_COLORS[((childIdInt % len) + len) % len];
 };
 
 // ---------- 매퍼 (명세 와이어 → UI 타입) ----------
@@ -122,16 +120,19 @@ function mapPhoto(p: SpecPhoto): Photo {
   };
 }
 
-// ---------- 인증 (EP-001) ----------
-
-export const login = async (input: LoginInput): Promise<LoginResponse> => {
-  const u = await api.post<SpecUser>("/auth/login", input);
+// ---------- 인증 (EP-001, r6: 미구현) ----------
+//
+// 서버에 인증 엔드포인트(EP-001~003 `/api/auth/*`)가 아직 없다(명세 r6 1.2절) —
+// 호출하면 404다. 백엔드가 모든 요청을 고정 데모 교사로 처리하므로, 로그인은
+// 서버를 부르지 않고 클라이언트에서 데모 세션을 만들어 진행한다. 인증이 붙는
+// 시점에 이 함수만 EP-001 호출로 바꾸면 되고, 업무 API 계약은 그대로다.
+export const login = async (_input: LoginInput): Promise<LoginResponse> => {
   return {
-    token: "session", // 세션 쿠키 인증 — 토큰 헤더는 쓰지 않는다(명세 1.2)
+    token: "session",
     teacher: {
-      name: u.name,
-      role: u.role === "teacher" ? "담임" : "원장",
-      className: u.center_name,
+      name: "데모 교사",
+      role: "담임",
+      className: "햇님반",
     },
   };
 };
@@ -182,6 +183,15 @@ export const fetchDailyRecord = async (
       savedAt: `${date}T13:30:00`,
     },
   };
+};
+
+// 특정 날짜에 하루 기록이 있는 아이들의 UI id 집합 — "기록 완료" 판정용(EP-008).
+// 실 서버 ChildOut에는 recorded 플래그가 없으므로, 그날 records를 조회해 채운다.
+export const fetchDayRecordChildIds = async (
+  date: string,
+): Promise<string[]> => {
+  const list = await api.get<ListEnvelope<SpecRecord>>(`/records?date=${date}`);
+  return list.items.map((r) => intToChildId(r.child_id));
 };
 
 export const saveDailyRecord = async (
@@ -404,28 +414,40 @@ export const updateObservationTag = async (
   };
 };
 
+// 관찰은 곧 하루 기록이다(명세: 관찰 누적 = records). 서버에는 관찰 전용 POST가
+// 없으므로(POST /children/{id}/observations → 405) 하루 기록을 만든다. 서버가
+// note로 발달영역을 자동 태깅하므로, 교사가 태그를 직접 골랐다면 기록 생성 후
+// EP-009로 그 태그를 덮어써 수동 태그(tags_edited)로 박제한다.
 export const addObservation = async (
   childId: string,
   tag: DevelopmentDomain | null,
   memo: string,
 ): Promise<ObservationEntry> => {
-  const res = await api.post<{
-    record_id: number;
-    date: string;
-    note: string;
-    dev_domain_tags: SpecDomain[];
-    tags_edited: boolean;
-  }>(`/children/${childIdToInt(childId)}/observations`, {
+  const specTag = tag ? domainToSpec(tag) : null;
+  const rec = await api.post<SpecRecord>("/records", {
+    child_id: childIdToInt(childId),
+    date: TODAY,
     note: memo,
-    dev_domain_tag: tag ? domainToSpec(tag) : null,
+    dev_domain_tags: specTag ? [specTag] : [],
   });
+  let tags: SpecDomain[] = rec.dev_domain_tags ?? [];
+  let edited = rec.tags_edited ?? false;
+  if (specTag) {
+    const upd = await api.put<{
+      record_id: number;
+      dev_domain_tags: SpecDomain[];
+      tags_edited: boolean;
+    }>(`/records/${rec.record_id}/tags`, { dev_domain_tags: [specTag] });
+    tags = upd.dev_domain_tags;
+    edited = upd.tags_edited;
+  }
   return {
-    id: intToRecordId(res.record_id),
+    id: intToRecordId(rec.record_id),
     childId,
-    date: res.date,
-    tag: domainFromSpec(res.dev_domain_tags[0]),
-    manualTag: res.tags_edited,
-    memo: res.note,
+    date: rec.date,
+    tag: domainFromSpec(tags[0]),
+    manualTag: edited,
+    memo: rec.note ?? memo,
   };
 };
 
@@ -502,14 +524,18 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
   const s = await api.get<SpecMetrics>("/metrics/summary");
   const adoptionRate = Math.round((s.adoption_rate ?? 0) * 100);
   const combinedRate = Math.round((s.minor_edit_rate ?? 0) * 100);
+  // 확정 문서가 없으면 서버는 분포·단축률·비용을 null로 준다(명세 EP-028 예외 1).
+  // 빈 상태에서도 화면이 깨지지 않도록 모든 파생 필드를 null 가드한다.
+  const timeReduction = s.time_reduction_rate ?? {};
+  const baselines = s.baseline_minutes ?? {};
   return {
     adoptionRate,
     minorEditGainPt: combinedRate - adoptionRate,
     combinedRate,
-    editDistribution: Object.values(s.edit_rate_distribution),
-    timeSavings: Object.keys(s.time_reduction_rate).map((k) => {
-      const base = s.baseline_minutes[k] ?? 0;
-      const red = s.time_reduction_rate[k];
+    editDistribution: Object.values(s.edit_rate_distribution ?? {}),
+    timeSavings: Object.keys(timeReduction).map((k) => {
+      const base = baselines[k] ?? 0;
+      const red = timeReduction[k];
       return {
         docType: DOC_LABEL_KO[k] ?? k,
         baseline: fmtMinutes(base),
@@ -520,7 +546,7 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
     perDocTime: fmtMinutes(s.avg_minutes_per_doc),
     taggingMatchRate: Math.round((s.tagging_agreement_rate ?? 0) * 100),
     monthlyCost:
-      s.token_cost.krw != null
+      s.token_cost?.krw != null
         ? `월 ${s.token_cost.krw.toLocaleString()}원`
         : "-",
     dailyConfirmed: s.daily_confirmed ?? [],
@@ -547,5 +573,12 @@ export const reloadSeed = async (): Promise<{ ok: boolean }> => {
   return { ok: true };
 };
 
-export const syncTemplates = (templates: Partial<Record<DocType, string>>) =>
-  api.post<{ ok: boolean; applied: string[] }>("/templates", { templates });
+// 로컬 양식 텍스트 동기화(데스크톱 부팅 시). r6에서 양식 등록은 EP-032
+// multipart 파일 업로드(.docx/.hwpx)로 바뀌었고 텍스트 JSON 계약은 사라졌다 —
+// 이 경로로 실 서버 `/templates`를 부르면 422다. 실제 양식 등록은 SCR-015의
+// 파일 업로드(별도 기능)로 하므로, 여기서는 서버를 부르지 않고 조용히 넘어간다.
+export const syncTemplates = async (
+  templates: Partial<Record<DocType, string>>,
+): Promise<{ ok: boolean; applied: string[] }> => {
+  return { ok: true, applied: Object.keys(templates) };
+};

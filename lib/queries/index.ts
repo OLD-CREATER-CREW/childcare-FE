@@ -16,6 +16,7 @@ export const queryKeys = {
   recordSummary: ["records", "summary"] as const,
   dailyRecord: (childId: string, date: string) =>
     ["records", childId, date] as const,
+  dayRecordedIds: (date: string) => ["records", "recorded", date] as const,
   documentDraft: (type: DocType, childId: string | null) =>
     ["documents", "draft", type, childId ?? "class"] as const,
   noticeQueue: ["documents", "notices", "queue"] as const,
@@ -42,6 +43,15 @@ export const useDailyRecord = (childId: string, date: string) =>
   useQuery({
     queryKey: queryKeys.dailyRecord(childId, date),
     queryFn: () => apiFn.fetchDailyRecord(childId, date),
+    staleTime: 0,
+    enabled: !!childId,
+  });
+
+/** 그날 기록을 남긴 아이들의 id 집합 — 하루 기록 화면의 "기록 완료" 판정 */
+export const useDayRecordedIds = (date: string) =>
+  useQuery({
+    queryKey: queryKeys.dayRecordedIds(date),
+    queryFn: () => apiFn.fetchDayRecordChildIds(date),
     staleTime: 0,
   });
 
@@ -71,12 +81,14 @@ export const useObservations = (childId: string) =>
   useQuery({
     queryKey: queryKeys.observations(childId),
     queryFn: () => apiFn.fetchObservations(childId),
+    enabled: !!childId,
   });
 
 export const useConsults = (childId: string) =>
   useQuery({
     queryKey: queryKeys.consults(childId),
     queryFn: () => apiFn.fetchConsults(childId),
+    enabled: !!childId,
   });
 
 export const useChecklist = () =>
@@ -104,6 +116,10 @@ export const useSaveDailyRecord = () => {
       qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
       qc.invalidateQueries({
         queryKey: queryKeys.dailyRecord(input.childId, input.date),
+      });
+      // 그날 "기록 완료" 목록 갱신 → 방금 저장한 아이가 완료로 표시됨
+      qc.invalidateQueries({
+        queryKey: queryKeys.dayRecordedIds(input.date),
       });
       // 원천 기록 변경 → 미확정 알림장 초안 무효화
       qc.invalidateQueries({

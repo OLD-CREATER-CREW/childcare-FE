@@ -71,26 +71,23 @@ export const docTypeFromSpec = (t: SpecDocType): DocType =>
 
 // ---------- ID 브리지 (UI 문자열 ↔ 명세 정수) ----------
 //
-// 목 시드가 "c01"·"o001"·"cs1" 형태의 문자열 키를 쓰므로, 와이어에서 요구하는
-// 정수 ID와 1:1 대응시킨다. 접두 오프셋으로 종류를 구분해 충돌을 막는다.
-
-const CHILD_BASE = 100; // c01 → 101
-const RECORD_BASE = 5000; // o001(관찰=기록) → 5001
-const CONSULT_BASE = 7000; // cs1 → 7001
+// UI는 아동·관찰(기록)·상담을 접두 문자열 키("c13"·"o68"·"cs3")로 다루고,
+// 와이어는 정수 ID를 쓴다. 실 백엔드가 부여하는 정수 값은 예측할 수 없으므로
+// (예: child_id가 13부터 시작) 오프셋을 두지 않고 **무손실 왕복**만 보장한다:
+// 접두 문자(c/o/cs)는 표현용이고, 정수 값은 그대로 왕복한다.
+//   intToChildId(13) → "c13" → childIdToInt("c13") → 13
 
 export const childIdToInt = (id: string): number =>
-  CHILD_BASE + Number(id.replace(/\D/g, ""));
-export const intToChildId = (n: number): string =>
-  `c${String(n - CHILD_BASE).padStart(2, "0")}`;
+  Number(id.replace(/\D/g, ""));
+export const intToChildId = (n: number): string => `c${n}`;
 
 export const recordIdToInt = (id: string): number =>
-  RECORD_BASE + Number(id.replace(/\D/g, ""));
-export const intToRecordId = (n: number): string =>
-  `o${String(n - RECORD_BASE).padStart(3, "0")}`;
+  Number(id.replace(/\D/g, ""));
+export const intToRecordId = (n: number): string => `o${n}`;
 
 export const consultIdToInt = (id: string): number =>
-  CONSULT_BASE + Number(id.replace(/\D/g, ""));
-export const intToConsultId = (n: number): string => `cs${n - CONSULT_BASE}`;
+  Number(id.replace(/\D/g, ""));
+export const intToConsultId = (n: number): string => `cs${n}`;
 
 // ---------- 와이어 응답 타입 ----------
 
@@ -242,17 +239,18 @@ export type SpecMetrics = {
   adoption_threshold: number;
   minor_edit_rate: number | null;
   edit_rate_avg: number | null;
-  edit_rate_distribution: Record<string, number>;
+  // 확정 문서가 없으면 서버가 아래 파생 집계를 null로 준다(EP-028 예외 1)
+  edit_rate_distribution: Record<string, number> | null;
   avg_minutes_per_doc: number | null;
-  baseline_minutes: Record<string, number>;
-  time_reduction_rate: Record<string, number>;
+  baseline_minutes: Record<string, number> | null;
+  time_reduction_rate: Record<string, number> | null;
   tagging_agreement_rate: number | null;
   token_cost: {
     tokens_in: number;
     tokens_out: number;
-    krw?: number;
+    krw?: number | null;
     source: string;
-  };
+  } | null;
   // --- 목 부가(최근 확정 추이) ---
   daily_confirmed?: { date: string; count: number }[];
 };
