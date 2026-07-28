@@ -57,5 +57,45 @@
 
 ### ⏭️ 남은 작업
 
-- [ ] 양식 연동(파일 시스템) 기능 확인 — 데스크톱(Electron) 환경에서 로컬 서식 파일 읽기→`syncTemplates`(POST /templates) 반영 실사용 점검
+- [x] 양식 연동(파일 시스템) 기능 확인 — 체인 결선 + e2e 8종으로 검증(Electron GUI 실행만 코드리뷰 갈음)
 - [ ] 백엔드 배포 시 `NEXT_PUBLIC_USE_MOCK=false` + `NEXT_PUBLIC_API_BASE_URL` 지정 후 실 API 스모크 (매핑 규약 실계약 대조: record 필드 세분화·관찰 직접추가 EP·양식 동기화 EP)
+
+---
+
+### Commit — 2026-07-28 18:06
+
+- Hash: `081122b`
+- Message: `Feat:#1 MSW 목을 명세 기반 실 API 계약으로 전환`
+- Issue: `#1`
+
+**변경 요약**
+
+- 와이어 계약 전면 교체: client.ts(세션 쿠키·오류 봉투), spec.ts(신설, 와이어 타입+매퍼), index.ts(seam 재작성), mocks/{db,handlers}(명세 EP·document_id 브리지·getMetricsSpec).
+- lib/types·화면·lib/queries 무수정 — seam이 UI↔명세 계약 차이 흡수.
+
+**결정 로그**
+
+- 명세에 없는 UI 표현 필드(색·출결 등)는 mock 부가/seam 파생으로 무회귀 유지.
+- 관찰 직접추가·양식 동기화는 공식 EP 밖 → REST 확장(POST /children/{id}/observations, POST /templates)으로 유지, 백엔드 계약 확정 시 대조.
+
+**다음 작업**
+
+- 백엔드 배포 후 실 API 스모크.
+
+### Commit — 2026-07-28 18:06
+
+- Hash: `77fbc8c`
+- Message: `Style:#1 UI 스페이싱·레이아웃 정리로 밀집감 해소`
+- Issue: `#1` (Closes)
+
+**변경 요약**
+
+- globals.css 섹션 리듬 20px화 + 표/필드 여백, 셀렉트 기본폭 부풀림으로 세로로 쌓이던 필드 고정폭 정렬(하루기록·관찰), 사진함 헤더·탭·계획안 기간 레이아웃 정리.
+
+**결정 로그**
+
+- 동작 변경 없음(순수 시각). `.inline .input` 전역 규칙은 건드리지 않고 인스턴스별 고정폭으로 해결(회귀 위험 최소화).
+
+**다음 작업**
+
+- 없음 (이슈 #1 범위 완료 → PR 머지 시 Closes).
