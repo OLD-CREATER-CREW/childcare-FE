@@ -50,44 +50,42 @@ export default function PlansPage() {
       />
 
       <div className="card mb-4">
-        <div className="inline">
-          <div className="field m-0">
-            <label>
-              <N n={1} />
-              기간
-            </label>
-            <span className="inline">
-              <span className="seg">
-                <button
-                  className={period === "weekly" ? "on" : ""}
-                  onClick={() => setPeriod("weekly")}
-                >
-                  주간
-                </button>
-                <button
-                  className={period === "monthly" ? "on" : ""}
-                  onClick={() => setPeriod("monthly")}
-                >
-                  월간
-                </button>
-              </span>
-              <input
-                className="input w-[200px]"
-                readOnly
-                value={
-                  period === "weekly" ? "2026-07-13 ~ 07-19" : "2026-07 전체"
-                }
-              />
+        <div className="field m-0">
+          <label>
+            <N n={1} />
+            기간
+          </label>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="seg">
+              <button
+                className={period === "weekly" ? "on" : ""}
+                onClick={() => setPeriod("weekly")}
+              >
+                주간
+              </button>
+              <button
+                className={period === "monthly" ? "on" : ""}
+                onClick={() => setPeriod("monthly")}
+              >
+                월간
+              </button>
             </span>
+            <input
+              className="input w-[200px]"
+              readOnly
+              value={
+                period === "weekly" ? "2026-07-13 ~ 07-19" : "2026-07 전체"
+              }
+            />
+            <button
+              className="btn primary"
+              onClick={makeDraft}
+              disabled={regenMutation.isPending}
+            >
+              <Sparkles size={14} />
+              {regenMutation.isPending ? "생성 중…" : "초안 만들기"}
+            </button>
           </div>
-          <button
-            className="btn primary ml-auto"
-            onClick={makeDraft}
-            disabled={regenMutation.isPending}
-          >
-            <Sparkles size={14} />
-            {regenMutation.isPending ? "생성 중…" : "초안 만들기"}
-          </button>
         </div>
       </div>
 

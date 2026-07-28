@@ -101,8 +101,8 @@ export default function ObservationsPage() {
 
       <div className="stack">
         <div className="card">
-          <div className="inline">
-            <div className="field m-0">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="field m-0 w-[150px]">
               <label>
                 <N n={1} />
                 아이
@@ -121,7 +121,7 @@ export default function ObservationsPage() {
                 )}
               </select>
             </div>
-            <div className="field m-0">
+            <div className="field m-0 w-[150px]">
               <label>기간</label>
               <select className="input">
                 <option>최근 1개월</option>
@@ -130,7 +130,7 @@ export default function ObservationsPage() {
               </select>
             </div>
             {child && (
-              <span className="ml-auto inline-flex items-center gap-2 text-[13px] text-muted">
+              <span className="ml-auto inline-flex items-center gap-2 pb-2.5 text-[13px] text-muted">
                 <Avatar name={child.name} color={child.color} />
                 {child.name} · 관찰 {obsQuery.data?.timeline.length ?? "…"}건
                 누적

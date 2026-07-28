@@ -232,9 +232,9 @@
     @apply ml-auto flex items-center gap-2;
   }
 
-  /* 섹션 리듬 — 카드·그리드 사이 일정한 간격 */
+  /* 섹션 리듬 — 카드·그리드 사이 일정한 간격 (디자인 토큰 주석의 "섹션 간 20px") */
   .stack {
-    @apply flex flex-col gap-4;
+    @apply flex flex-col gap-5;
   }
 
   /* 명세 바 — SCR/FN/EP 매핑 (body.annot일 때만 표시) */
@@ -268,17 +268,17 @@
     box-shadow: var(--shadow-sm);
   }
   .card h2 {
-    @apply mb-3.5 mt-0 flex items-center gap-2 text-[15px] font-bold tracking-tight;
+    @apply mb-4 mt-0 flex items-center gap-2 text-[15px] font-bold tracking-tight;
   }
   .card h2 .hint {
     @apply text-[12.5px] font-normal text-muted;
   }
   .grid2 {
-    @apply grid items-start gap-4;
+    @apply grid items-start gap-5;
     grid-template-columns: minmax(240px, 0.85fr) 1.3fr;
   }
   .grid3 {
-    @apply grid grid-cols-3 gap-4;
+    @apply grid grid-cols-3 gap-5;
   }
 
   .btn {
@@ -325,14 +325,14 @@
     @apply pointer-events-none cursor-not-allowed opacity-45;
   }
   .btnrow {
-    @apply mt-4 flex flex-wrap items-center gap-2.5;
+    @apply mt-5 flex flex-wrap items-center gap-2.5;
   }
 
   .field {
-    @apply mb-3.5;
+    @apply mb-[18px];
   }
   .field label {
-    @apply mb-1.5 block text-[12.5px] font-bold text-muted;
+    @apply mb-2 block text-[12.5px] font-bold text-muted;
   }
   .input {
     @apply w-full rounded-[10px] border border-line-strong bg-surface px-3.5 py-2.5;
@@ -465,7 +465,7 @@
     @apply border-b border-line px-3 py-2 text-left text-xs font-bold text-muted;
   }
   .tbl td {
-    @apply border-b border-line px-3 py-2.5 align-top;
+    @apply border-b border-line px-3 py-3 align-top;
   }
   .tbl tr:last-child td {
     @apply border-b-0;
@@ -545,6 +545,10 @@
   /* 사진함 */
   .phototabs {
     @apply flex gap-2 overflow-x-auto pb-1;
+  }
+  /* 좁은 폭에서 탭 칩이 세로로 줄바꿈되지 않고 가로 스크롤되도록 */
+  .phototabs .chip {
+    @apply flex-none whitespace-nowrap;
   }
   .photogrid {
     @apply mt-3.5 grid gap-3;

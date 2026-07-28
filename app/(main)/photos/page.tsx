@@ -120,7 +120,7 @@ export default function PhotosPage() {
 
       <div className="stack">
         <div className="card">
-          <div className="inline">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
             <button
               className="btn primary big"
               onClick={upload}
@@ -129,26 +129,28 @@ export default function PhotosPage() {
               <N n={1} />
               <Camera size={16} /> 사진 올리기
             </button>
-            <div className="min-w-[180px] flex-1">
+            <div className="min-w-[220px] flex-1">
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-bold">
+                <span className="inline-flex items-center gap-1.5">
+                  <N n={2} />
+                  {inbox
+                    ? `분류 ${inbox.classified}/${inbox.total}장`
+                    : "불러오는 중…"}
+                </span>
+                {(inbox?.classifying ?? 0) > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-amber">
+                    <Loader2 size={13} className="animate-spin" />
+                    {inbox?.classifying}장 분류 중
+                  </span>
+                )}
+              </div>
               <Progress
                 value={inbox?.classified ?? 0}
                 max={inbox?.total ?? 1}
               />
             </div>
-            <span className="inline-flex items-center gap-1.5 text-[13px] font-bold">
-              <N n={2} />
-              {inbox
-                ? `분류 ${inbox.classified}/${inbox.total}장`
-                : "불러오는 중…"}
-              {(inbox?.classifying ?? 0) > 0 && (
-                <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-amber">
-                  <Loader2 size={13} className="animate-spin" />
-                  {inbox?.classifying}장 분류 중
-                </span>
-              )}
-            </span>
           </div>
-          <div className="mt-3">
+          <div className="mt-4">
             <Notice kind="soft">
               분류는 비동기로 진행됩니다 — 화면을 떠나도 계속되고, 10분 넘게
               멈춘 사진은 사진함을 열 때 자동으로 다시 분류됩니다.

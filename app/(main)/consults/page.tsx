@@ -72,7 +72,7 @@ export default function ConsultsPage() {
 
       <div className="stack">
         <div className="card">
-          <div className="inline">
+          <div className="flex flex-wrap items-end gap-3">
             <div className="field m-0">
               <label>
                 <N n={1} />
@@ -108,10 +108,10 @@ export default function ConsultsPage() {
               <N n={3} />
               <FileText size={14} /> 텍스트 붙여넣기
             </button>
-            <span className="text-[12.5px] text-muted">
-              m4a·mp3·wav · <b>25MB·약 20분까지</b>
-            </span>
           </div>
+          <p className="mt-3 text-[12.5px] text-muted">
+            m4a·mp3·wav · <b>25MB·약 20분까지</b>
+          </p>
         </div>
 
         {consultQuery.isError ? (
@@ -229,7 +229,9 @@ export default function ConsultsPage() {
               <tbody>
                 {data?.history.map((h) => (
                   <tr key={h.id}>
-                    <td className="font-mono text-[12.5px]">{h.date}</td>
+                    <td className="whitespace-nowrap font-mono text-[12.5px]">
+                      {h.date}
+                    </td>
                     <td className="font-semibold">{h.topic}</td>
                     <td className="text-[13px] text-muted">
                       {(h.summaryFinal ?? h.summaryDraft)

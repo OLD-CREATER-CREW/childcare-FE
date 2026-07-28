@@ -85,7 +85,7 @@ export default function LoginPage() {
           </div>
           <button
             type="submit"
-            className="btn primary big mt-1 w-full"
+            className="btn primary big mt-2 w-full"
             disabled={loginMutation.isPending}
           >
             <N n={3} />

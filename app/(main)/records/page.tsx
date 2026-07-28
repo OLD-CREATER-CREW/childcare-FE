@@ -201,8 +201,8 @@ function RecordForm() {
                   </div>
                 </div>
 
-                <div className="inline mb-3.5">
-                  <div className="field m-0">
+                <div className="mb-[18px] flex flex-wrap items-end gap-x-4 gap-y-[18px]">
+                  <div className="field m-0 w-[150px]">
                     <label>
                       <N n={3} />
                       점심
@@ -222,7 +222,7 @@ function RecordForm() {
                       ))}
                     </select>
                   </div>
-                  <div className="field m-0">
+                  <div className="field m-0 w-[150px]">
                     <label>간식</label>
                     <select
                       className="input"
@@ -263,7 +263,7 @@ function RecordForm() {
                         aria-label="낮잠 종료"
                       />
                       <select
-                        className="input"
+                        className="input w-[108px]"
                         value={form.napQuality}
                         onChange={(e) =>
                           setForm((f) => ({
