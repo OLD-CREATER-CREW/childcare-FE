@@ -55,7 +55,7 @@ function NoticesContent() {
     if (firstDraft) setChildId(firstDraft.childId);
   }, [queue, childId]);
 
-  const recordQuery = useDailyRecord(childId || "c01", TODAY);
+  const recordQuery = useDailyRecord(childId, TODAY);
   const record = recordQuery.data?.record;
   const selected = queue?.queue.find((q) => q.childId === childId);
 

@@ -12,6 +12,7 @@ import {
   Notice,
   PageHead,
   QueryError,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
@@ -20,7 +21,9 @@ import {
 export default function ConsultsPage() {
   const { toast } = useApp();
   const childrenQuery = useChildren();
-  const [childId, setChildId] = useState("c01");
+  const kids = childrenQuery.data ?? [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const childId = picked ?? kids[0]?.id ?? "";
   const consultQuery = useConsults(childId);
   const confirmMutation = useConfirmConsult();
 
@@ -29,7 +32,6 @@ export default function ConsultsPage() {
 
   const data = consultQuery.data;
   const current = data?.current ?? null;
-  const kids = childrenQuery.data ?? [];
 
   useEffect(() => {
     if (current) setDraft(current.summaryDraft || current.summaryFinal || "");
@@ -78,19 +80,13 @@ export default function ConsultsPage() {
                 <N n={1} />
                 아이
               </label>
-              <select
-                className="input"
+              <Select
+                className="w-[180px]"
+                ariaLabel="아이 선택"
                 value={childId}
-                onChange={(e) => setChildId(e.target.value)}
-              >
-                {(kids.length ? kids : [{ id: "c01", name: "김민준" }]).map(
-                  (c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ),
-                )}
-              </select>
+                onChange={setPicked}
+                options={kids.map((c) => ({ value: c.id, label: c.name }))}
+              />
             </div>
             <button
               className="btn primary"

@@ -10,8 +10,13 @@ import {
   Pencil,
   Sparkles,
 } from "lucide-react";
-import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
-import { useChildren, useNoticeQueue, useRecordSummary } from "@/lib/queries";
+import { CLASS_NAME, TEACHER_NAME, TODAY, TODAY_LABEL } from "@/lib/constants";
+import {
+  useChildren,
+  useDayRecordedIds,
+  useNoticeQueue,
+  useRecordSummary,
+} from "@/lib/queries";
 import {
   Avatar,
   N,
@@ -28,10 +33,15 @@ export default function HomePage() {
   const childrenQuery = useChildren();
   const summaryQuery = useRecordSummary();
   const queueQuery = useNoticeQueue();
+  const recordedQuery = useDayRecordedIds(TODAY);
 
   const summary = summaryQuery.data;
   const kids = childrenQuery.data ?? [];
-  const remaining = kids.filter((c) => !c.recorded);
+  // 하루 기록 화면과 동일한 원천으로 "기록 완료"를 판정한다 — 실 서버 ChildOut엔
+  // recorded 플래그가 없어(?? false), 그날 records 조회 결과를 유일한 기준으로 쓴다.
+  const recordedIds = new Set(recordedQuery.data ?? []);
+  const isRecorded = (id: string) => recordedIds.has(id);
+  const remaining = kids.filter((c) => !isRecorded(c.id));
 
   return (
     <>
@@ -148,7 +158,7 @@ export default function HomePage() {
                 <button
                   key={c.id}
                   className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-[13.5px] font-medium transition-all hover:-translate-y-0.5 hover:shadow-card ${
-                    c.recorded
+                    isRecorded(c.id)
                       ? "border-line bg-surface"
                       : "border-dashed border-line-strong bg-paper"
                   }`}
@@ -159,7 +169,7 @@ export default function HomePage() {
                     <span className="block truncate">{c.name}</span>
                     <span
                       className={`block text-[11px] font-semibold ${
-                        c.recorded
+                        isRecorded(c.id)
                           ? "text-confirm"
                           : c.attending
                             ? "text-amber"
@@ -168,7 +178,7 @@ export default function HomePage() {
                     >
                       {!c.attending
                         ? "결석"
-                        : c.recorded
+                        : isRecorded(c.id)
                           ? "기록 완료"
                           : "기록 전"}
                     </span>

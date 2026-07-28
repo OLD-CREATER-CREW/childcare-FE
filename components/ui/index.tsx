@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Check, ChevronDown } from "lucide-react";
 import { useApp } from "@/lib/store";
 
 /** 명세 주석 — 요소 번호 (스토리보드 목업의 ①②…) */
@@ -292,5 +294,146 @@ export function FadeIn({
     >
       {children}
     </motion.div>
+  );
+}
+
+/**
+ * 톤앤매너 통일 드롭다운 — OS 기본 `<select>` 대신 앱 디자인 토큰으로 그린다.
+ * 트리거는 `.input`과 동일한 테두리·라운드·포커스 링을 쓰고, 목록은 카드 톤의
+ * 팝오버(초록 강조·체크)로 뜬다. 키보드(↑↓·Enter·Esc)와 바깥 클릭 닫기를 지원한다.
+ *
+ * width는 wrapper의 className으로 제어한다(미지정 시 w-full, `w-auto`·`w-[150px]` 등 가능).
+ */
+export type SelectOption = { value: string; label: string };
+
+export function Select({
+  value,
+  onChange,
+  options,
+  className,
+  ariaLabel,
+  placeholder = "선택",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: (SelectOption | string)[];
+  className?: string;
+  ariaLabel?: string;
+  placeholder?: string;
+}) {
+  const opts: SelectOption[] = options.map((o) =>
+    typeof o === "string" ? { value: o, label: o } : o,
+  );
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = opts.find((o) => o.value === value);
+
+  // 바깥 클릭 시 닫기
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  // 열릴 때 활성 항목을 현재 선택값으로 맞춘다
+  useEffect(() => {
+    if (open) setActive(opts.findIndex((o) => o.value === value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const choose = (v: string) => {
+    onChange(v);
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setOpen(false);
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      const dir = e.key === "ArrowDown" ? 1 : -1;
+      setActive((i) => (i + dir + opts.length) % opts.length);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (!open) setOpen(true);
+      else if (active >= 0) choose(opts[active].value);
+    }
+  };
+
+  return (
+    <div className={`relative ${className ?? "w-full"}`} ref={ref}>
+      <button
+        type="button"
+        className="input flex w-full cursor-pointer items-center justify-between gap-2 text-left"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={onKeyDown}
+      >
+        <span className={selected ? "truncate" : "truncate text-faint"}>
+          {selected?.label ?? placeholder}
+        </span>
+        <ChevronDown
+          size={16}
+          className={`flex-none text-muted transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.ul
+            role="listbox"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute left-0 top-full z-30 mt-1.5 max-h-[248px] w-full min-w-max overflow-y-auto rounded-[10px] border border-line-strong bg-surface p-1"
+            style={{ boxShadow: "var(--shadow-lift)" }}
+          >
+            {opts.map((o, i) => {
+              const on = o.value === value;
+              const isActive = i === active;
+              return (
+                <li key={o.value}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={on}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => choose(o.value)}
+                    className={`flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors ${
+                      on
+                        ? "bg-green-soft font-bold text-green-deep"
+                        : isActive
+                          ? "bg-green-ghost"
+                          : "text-ink"
+                    }`}
+                  >
+                    <span className="whitespace-nowrap">{o.label}</span>
+                    {on && <Check size={14} className="flex-none text-green" />}
+                  </button>
+                </li>
+              );
+            })}
+          </motion.ul>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

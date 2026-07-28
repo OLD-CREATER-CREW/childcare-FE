@@ -16,6 +16,7 @@ import {
   N,
   PageHead,
   QueryError,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
@@ -27,11 +28,16 @@ import type { ObservationEntry } from "@/lib/types";
 export default function ObservationsPage() {
   const { toast } = useApp();
   const childrenQuery = useChildren();
-  const [childId, setChildId] = useState("c01");
+  const kids = childrenQuery.data ?? [];
+  // 선택 아동은 로드된 아동 목록의 첫 번째로 기본 지정한다(실 서버 child_id는
+  // 예측 불가하므로 하드코딩 "c01"을 쓰지 않는다).
+  const [picked, setPicked] = useState<string | null>(null);
+  const childId = picked ?? kids[0]?.id ?? "";
   const obsQuery = useObservations(childId);
   const tagMutation = useUpdateObservationTag();
   const addMutation = useAddObservation();
 
+  const [range, setRange] = useState("최근 1개월");
   const [editTarget, setEditTarget] = useState<ObservationEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [newMemo, setNewMemo] = useState("");
@@ -39,7 +45,6 @@ export default function ObservationsPage() {
     null,
   );
 
-  const kids = childrenQuery.data ?? [];
   const child = kids.find((c) => c.id === childId);
   const maxCount = useMemo(
     () => Math.max(0, ...(obsQuery.data?.domains.map((d) => d.count) ?? [])),
@@ -107,27 +112,21 @@ export default function ObservationsPage() {
                 <N n={1} />
                 아이
               </label>
-              <select
-                className="input"
+              <Select
+                ariaLabel="아이 선택"
                 value={childId}
-                onChange={(e) => setChildId(e.target.value)}
-              >
-                {(kids.length ? kids : [{ id: "c01", name: "김민준" }]).map(
-                  (c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ),
-                )}
-              </select>
+                onChange={setPicked}
+                options={kids.map((c) => ({ value: c.id, label: c.name }))}
+              />
             </div>
             <div className="field m-0 w-[150px]">
               <label>기간</label>
-              <select className="input">
-                <option>최근 1개월</option>
-                <option>최근 3개월</option>
-                <option>올해 전체</option>
-              </select>
+              <Select
+                ariaLabel="기간"
+                value={range}
+                onChange={setRange}
+                options={["최근 1개월", "최근 3개월", "올해 전체"]}
+              />
             </div>
             {child && (
               <span className="ml-auto inline-flex items-center gap-2 pb-2.5 text-[13px] text-muted">
