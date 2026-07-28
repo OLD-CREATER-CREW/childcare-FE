@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -15,6 +16,7 @@ import {
   Notice,
   PageHead,
   QueryError,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
@@ -25,6 +27,7 @@ const DIST_LABELS = ["0", "~5%", "~10%", "~20%", "~40%", "40%+"];
 export default function DashboardPage() {
   const metricsQuery = useMetrics();
   const m = metricsQuery.data;
+  const [period, setPeriod] = useState("기간: 최근 2주");
 
   if (metricsQuery.isError) {
     return (
@@ -49,11 +52,13 @@ export default function DashboardPage() {
         title="지표 대시보드"
         sub="AI 도입 효과 — 심사 시연의 마무리 화면"
         right={
-          <select className="input w-auto">
-            <option>기간: 최근 2주</option>
-            <option>최근 1개월</option>
-            <option>전체</option>
-          </select>
+          <Select
+            className="w-fit"
+            ariaLabel="기간"
+            value={period}
+            onChange={setPeriod}
+            options={["기간: 최근 2주", "최근 1개월", "전체"]}
+          />
         }
       />
       <SpecBar scr="SCR-013" fn={["FN-014"]} ep={["EP-028 metrics/summary"]} />

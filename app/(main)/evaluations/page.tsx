@@ -8,6 +8,7 @@ import {
   N,
   Notice,
   PageHead,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
@@ -15,10 +16,11 @@ import {
 // SCR-011 발달평가서 — 누적 관찰 종합 (아동 단위 문서)
 export default function EvaluationsPage() {
   const childrenQuery = useChildren();
-  const [childId, setChildId] = useState("c01");
+  const kids = childrenQuery.data ?? [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const childId = picked ?? kids[0]?.id ?? "";
   const obsQuery = useObservations(childId);
 
-  const kids = childrenQuery.data ?? [];
   const child = kids.find((c) => c.id === childId);
   const totalObs =
     obsQuery.data?.domains.reduce((sum, d) => sum + d.count, 0) ?? 0;
@@ -29,18 +31,13 @@ export default function EvaluationsPage() {
         title="발달평가서"
         sub={`${child?.name ?? "…"} · 2026 — 누적 관찰 종합`}
         right={
-          <select
-            className="input w-auto"
+          <Select
+            className="w-[180px]"
+            ariaLabel="아이 선택"
             value={childId}
-            onChange={(e) => setChildId(e.target.value)}
-            aria-label="아이 선택"
-          >
-            {(kids.length ? kids : [{ id: "c01", name: "김민준" }]).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            onChange={setPicked}
+            options={kids.map((c) => ({ value: c.id, label: c.name }))}
+          />
         }
       />
       <SpecBar

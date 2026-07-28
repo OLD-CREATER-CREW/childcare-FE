@@ -12,6 +12,7 @@ import {
   Notice,
   PageHead,
   QueryError,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
@@ -20,7 +21,9 @@ import {
 export default function ConsultsPage() {
   const { toast } = useApp();
   const childrenQuery = useChildren();
-  const [childId, setChildId] = useState("c01");
+  const kids = childrenQuery.data ?? [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const childId = picked ?? kids[0]?.id ?? "";
   const consultQuery = useConsults(childId);
   const confirmMutation = useConfirmConsult();
 
@@ -29,7 +32,6 @@ export default function ConsultsPage() {
 
   const data = consultQuery.data;
   const current = data?.current ?? null;
-  const kids = childrenQuery.data ?? [];
 
   useEffect(() => {
     if (current) setDraft(current.summaryDraft || current.summaryFinal || "");
@@ -72,25 +74,19 @@ export default function ConsultsPage() {
 
       <div className="stack">
         <div className="card">
-          <div className="inline">
+          <div className="flex flex-wrap items-end gap-3">
             <div className="field m-0">
               <label>
                 <N n={1} />
                 아이
               </label>
-              <select
-                className="input"
+              <Select
+                className="w-[180px]"
+                ariaLabel="아이 선택"
                 value={childId}
-                onChange={(e) => setChildId(e.target.value)}
-              >
-                {(kids.length ? kids : [{ id: "c01", name: "김민준" }]).map(
-                  (c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ),
-                )}
-              </select>
+                onChange={setPicked}
+                options={kids.map((c) => ({ value: c.id, label: c.name }))}
+              />
             </div>
             <button
               className="btn primary"
@@ -108,10 +104,10 @@ export default function ConsultsPage() {
               <N n={3} />
               <FileText size={14} /> 텍스트 붙여넣기
             </button>
-            <span className="text-[12.5px] text-muted">
-              m4a·mp3·wav · <b>25MB·약 20분까지</b>
-            </span>
           </div>
+          <p className="mt-3 text-[12.5px] text-muted">
+            m4a·mp3·wav · <b>25MB·약 20분까지</b>
+          </p>
         </div>
 
         {consultQuery.isError ? (
@@ -229,7 +225,9 @@ export default function ConsultsPage() {
               <tbody>
                 {data?.history.map((h) => (
                   <tr key={h.id}>
-                    <td className="font-mono text-[12.5px]">{h.date}</td>
+                    <td className="whitespace-nowrap font-mono text-[12.5px]">
+                      {h.date}
+                    </td>
                     <td className="font-semibold">{h.topic}</td>
                     <td className="text-[13px] text-muted">
                       {(h.summaryFinal ?? h.summaryDraft)

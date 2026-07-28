@@ -55,7 +55,7 @@ function NoticesContent() {
     if (firstDraft) setChildId(firstDraft.childId);
   }, [queue, childId]);
 
-  const recordQuery = useDailyRecord(childId || "c01", TODAY);
+  const recordQuery = useDailyRecord(childId, TODAY);
   const record = recordQuery.data?.record;
   const selected = queue?.queue.find((q) => q.childId === childId);
 
@@ -155,23 +155,27 @@ function NoticesContent() {
               <table className="tbl">
                 <tbody>
                   <tr>
-                    <td className="w-[72px] text-muted">활동</td>
+                    <td className="w-[92px] whitespace-nowrap text-muted">
+                      활동
+                    </td>
                     <td>{record.activities.join(", ") || "—"}</td>
                   </tr>
                   <tr>
-                    <td className="text-muted">점심 · 간식</td>
+                    <td className="whitespace-nowrap text-muted">
+                      점심 · 간식
+                    </td>
                     <td>
                       {record.lunch} · {record.snack}
                     </td>
                   </tr>
                   <tr>
-                    <td className="text-muted">낮잠</td>
+                    <td className="whitespace-nowrap text-muted">낮잠</td>
                     <td>
                       {record.napFrom} ~ {record.napTo} · {record.napQuality}
                     </td>
                   </tr>
                   <tr>
-                    <td className="text-muted">특이</td>
+                    <td className="whitespace-nowrap text-muted">특이</td>
                     <td>{record.memo || "—"}</td>
                   </tr>
                 </tbody>

@@ -5,8 +5,20 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, ChevronRight, Mic, Paperclip } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { ACTIVITY_PRESETS, TODAY } from "@/lib/constants";
-import { useChildren, useDailyRecord, useSaveDailyRecord } from "@/lib/queries";
-import { Avatar, N, PageHead, Skeleton, SpecBar } from "@/components/ui";
+import {
+  useChildren,
+  useDailyRecord,
+  useDayRecordedIds,
+  useSaveDailyRecord,
+} from "@/lib/queries";
+import {
+  Avatar,
+  N,
+  PageHead,
+  Select,
+  Skeleton,
+  SpecBar,
+} from "@/components/ui";
 import type { MealAmount, NapQuality } from "@/lib/types";
 
 const LUNCH_OPTIONS: MealAmount[] = [
@@ -36,9 +48,36 @@ function RecordForm() {
   const saveMutation = useSaveDailyRecord();
 
   const kids = useMemo(() => childrenQuery.data ?? [], [childrenQuery.data]);
-  const [childId, setChildId] = useState(params.get("child") ?? "c01");
+  const [childId, setChildId] = useState(params.get("child") ?? "");
   const [date, setDate] = useState(TODAY);
   const recordQuery = useDailyRecord(childId, date);
+  const recordedQuery = useDayRecordedIds(date);
+
+  // 그날 기록을 남긴 아이 집합 — 실 서버 ChildOut엔 recorded 플래그가 없으므로
+  // records 조회로 판정한다. 이 값으로 "기록 완료" 표시·정렬·다음 아이를 결정한다.
+  const recordedIds = useMemo(
+    () => new Set(recordedQuery.data ?? []),
+    [recordedQuery.data],
+  );
+  const isRecorded = (id: string) => recordedIds.has(id);
+
+  // 완료된 아이를 위로 모아, 남은 작업이 아래에 이어지게 한다(안정 정렬).
+  const orderedKids = useMemo(
+    () =>
+      [...kids].sort(
+        (a, b) => Number(isRecorded(b.id)) - Number(isRecorded(a.id)),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [kids, recordedIds],
+  );
+
+  // 선택 아동이 비어 있으면 아직 기록 안 한 첫 아동으로 채운다(모두 완료면 첫 아동).
+  useEffect(() => {
+    if (childId || !kids.length) return;
+    const firstTodo = kids.find((c) => !isRecorded(c.id)) ?? kids[0];
+    setChildId(firstTodo.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childId, kids, recordedIds]);
 
   const [form, setForm] = useState(EMPTY_FORM);
   const child = kids.find((c) => c.id === childId);
@@ -81,7 +120,11 @@ function RecordForm() {
       },
     });
 
-  const nextUnrecorded = kids.find((c) => !c.recorded && c.id !== childId);
+  // 다음 아이 = 현재 이후로 아직 기록 안 한 첫 아동, 없으면 목록 내 다른 미기록 아동.
+  const curIdx = orderedKids.findIndex((c) => c.id === childId);
+  const nextUnrecorded =
+    orderedKids.slice(curIdx + 1).find((c) => !isRecorded(c.id)) ??
+    orderedKids.find((c) => !isRecorded(c.id) && c.id !== childId);
 
   const saveAndNext = () =>
     save(() => {
@@ -97,15 +140,16 @@ function RecordForm() {
         title="하루 기록 입력"
         sub="아이별 1회 입력 — 모든 문서의 유일한 원천"
         right={
-          <select
-            className="input w-auto"
+          <Select
+            className="w-fit"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
-            aria-label="날짜"
-          >
-            <option value="2026-07-16">2026-07-16 (목)</option>
-            <option value="2026-07-15">2026-07-15 (수)</option>
-          </select>
+            onChange={setDate}
+            ariaLabel="날짜"
+            options={[
+              { value: "2026-07-16", label: "2026-07-16 (목)" },
+              { value: "2026-07-15", label: "2026-07-15 (수)" },
+            ]}
+          />
         }
       />
       <SpecBar
@@ -120,14 +164,14 @@ function RecordForm() {
             <N n={1} />
             아이 선택
             <span className="hint">
-              {kids.filter((c) => c.recorded).length}/{kids.length} 완료
+              {kids.filter((c) => isRecorded(c.id)).length}/{kids.length} 완료
             </span>
           </h2>
           {childrenQuery.isLoading ? (
             <Skeleton lines={6} />
           ) : (
             <div className="rail max-h-[460px] overflow-y-auto pr-1">
-              {kids.map((c) => (
+              {orderedKids.map((c) => (
                 <button
                   key={c.id}
                   className={`rail-item ${c.id === childId ? "on" : ""}`}
@@ -138,8 +182,10 @@ function RecordForm() {
                   <span className="meta">
                     {!c.attending ? (
                       "결석"
-                    ) : c.recorded ? (
-                      <CheckCircle2 size={14} className="text-confirm" />
+                    ) : isRecorded(c.id) ? (
+                      <span className="inline-flex items-center gap-1 font-bold text-confirm">
+                        <CheckCircle2 size={14} /> 기록 완료
+                      </span>
                     ) : (
                       "기록 전"
                     )}
@@ -201,43 +247,31 @@ function RecordForm() {
                   </div>
                 </div>
 
-                <div className="inline mb-3.5">
-                  <div className="field m-0">
+                <div className="mb-[18px] flex flex-wrap items-end gap-x-4 gap-y-[18px]">
+                  <div className="field m-0 w-[150px]">
                     <label>
                       <N n={3} />
                       점심
                     </label>
-                    <select
-                      className="input"
+                    <Select
+                      ariaLabel="점심"
                       value={form.lunch}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          lunch: e.target.value as MealAmount,
-                        }))
+                      onChange={(v) =>
+                        setForm((f) => ({ ...f, lunch: v as MealAmount }))
                       }
-                    >
-                      {LUNCH_OPTIONS.map((o) => (
-                        <option key={o}>{o}</option>
-                      ))}
-                    </select>
+                      options={LUNCH_OPTIONS}
+                    />
                   </div>
-                  <div className="field m-0">
+                  <div className="field m-0 w-[150px]">
                     <label>간식</label>
-                    <select
-                      className="input"
+                    <Select
+                      ariaLabel="간식"
                       value={form.snack}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          snack: e.target.value as MealAmount,
-                        }))
+                      onChange={(v) =>
+                        setForm((f) => ({ ...f, snack: v as MealAmount }))
                       }
-                    >
-                      {LUNCH_OPTIONS.map((o) => (
-                        <option key={o}>{o}</option>
-                      ))}
-                    </select>
+                      options={LUNCH_OPTIONS}
+                    />
                   </div>
                   <div className="field m-0">
                     <label>
@@ -262,20 +296,18 @@ function RecordForm() {
                         }
                         aria-label="낮잠 종료"
                       />
-                      <select
-                        className="input"
+                      <Select
+                        className="w-fit"
+                        ariaLabel="낮잠 상태"
                         value={form.napQuality}
-                        onChange={(e) =>
+                        onChange={(v) =>
                           setForm((f) => ({
                             ...f,
-                            napQuality: e.target.value as NapQuality,
+                            napQuality: v as NapQuality,
                           }))
                         }
-                      >
-                        {NAP_OPTIONS.map((o) => (
-                          <option key={o}>{o}</option>
-                        ))}
-                      </select>
+                        options={NAP_OPTIONS}
+                      />
                     </span>
                   </div>
                 </div>
@@ -324,7 +356,7 @@ function RecordForm() {
             )}
           </div>
 
-          <div className="btnrow mt-0">
+          <div className="btnrow mt-0 justify-end">
             <button
               className="btn big"
               onClick={() => save()}
@@ -339,7 +371,7 @@ function RecordForm() {
                 onClick={saveAndNext}
                 disabled={saveMutation.isPending || recordQuery.isLoading}
               >
-                저장하고 다음 아이 ({nextUnrecorded.name}){" "}
+                저장하고 다음 아이
                 <ChevronRight size={15} />
               </button>
             )}

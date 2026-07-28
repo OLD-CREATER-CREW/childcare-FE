@@ -223,6 +223,12 @@ type DbState = {
   settings: AppSettings;
   /** 로컬 양식(서식) — 지정되면 해당 문서 초안이 이 서식으로 생성된다 */
   templates: Partial<Record<DocType, string>>;
+  /**
+   * 명세 계약은 문서를 document_id(정수)로 주소지정한다. 내부 문서는 (type,childId)
+   * 키로 관리하므로, 그 키에 안정적인 정수 id를 매겨 와이어에서 쓴다.
+   */
+  docIdByKey: Map<string, number>;
+  docSeq: number;
 };
 
 function recordKey(childId: string, date: string) {
@@ -423,6 +429,7 @@ function seedObservations(): ObservationEntry[] {
     childId,
     date: `2026-${md}`,
     tag,
+    tags: tag ? [tag] : [],
     manualTag: false,
     memo,
   }));
@@ -583,6 +590,8 @@ function createState(): DbState {
       models: { generate: "Sonnet 5", light: "Haiku 4.5" },
     },
     templates: {},
+    docIdByKey: new Map(),
+    docSeq: 3000,
   };
 }
 
@@ -906,6 +915,7 @@ export function addObservation(
     childId,
     date: TODAY,
     tag,
+    tags: tag ? [tag] : [],
     manualTag: tag !== null,
     memo: memo.trim(),
   };
@@ -1070,6 +1080,60 @@ export function getMetrics(): MetricsSummary {
   };
 }
 
+/** 명세 EP-028 단위(0~1 비율·분·원)로 지표를 낸다. 화면 포맷은 seam이 맡는다. */
+export function getMetricsSpec() {
+  const confirmed = Array.from(state.documents.values()).filter(
+    (d) => d.status !== "draft" && d.editDistance !== null,
+  );
+  const seededDone = 34;
+  const zeroEdits =
+    21 + confirmed.filter((d) => (d.editDistance ?? 100) === 0).length;
+  const minorEdits =
+    7 +
+    confirmed.filter((d) => {
+      const e = d.editDistance ?? 100;
+      return e > 0 && e <= 10;
+    }).length;
+  const totalDocs = seededDone + confirmed.length;
+  const nonManual = state.observations.filter((o) => !o.manualTag).length;
+  return {
+    confirmed_count: totalDocs,
+    adopted_count: zeroEdits,
+    adoption_rate: zeroEdits / totalDocs,
+    adoption_threshold: 0,
+    minor_edit_rate: (zeroEdits + minorEdits) / totalDocs,
+    edit_rate_avg: 0.084,
+    edit_rate_distribution: {
+      "0": zeroEdits,
+      "0-0.1": minorEdits,
+      "0.1-0.3": 4,
+      "0.3+": 3,
+    },
+    avg_minutes_per_doc: 3 + 20 / 60,
+    baseline_minutes: { notice: 7 + 5 / 60, journal: 18, weekly_plan: 45 },
+    time_reduction_rate: { notice: 0.53, journal: 0.61, weekly_plan: 0.68 },
+    tagging_agreement_rate: nonManual / Math.max(1, state.observations.length),
+    token_cost: {
+      tokens_in: 184000,
+      tokens_out: 41000,
+      krw: 3540,
+      source: "llm_calls",
+    },
+    daily_confirmed: [
+      { date: "07-03", count: 9 },
+      { date: "07-04", count: 12 },
+      { date: "07-07", count: 14 },
+      { date: "07-08", count: 11 },
+      { date: "07-09", count: 15 },
+      { date: "07-10", count: 13 },
+      { date: "07-11", count: 16 },
+      { date: "07-14", count: 12 },
+      { date: "07-15", count: 15 },
+      { date: "07-16", count: Math.min(15, 10 + confirmed.length) },
+    ],
+  };
+}
+
 // ---------- 설정 ----------
 
 export function getSettings(): AppSettings {
@@ -1078,4 +1142,60 @@ export function getSettings(): AppSettings {
 
 export function setReplayMode(on: boolean) {
   state.settings.replayMode = on;
+}
+
+// ---------- 문서 id 브리지 (명세: document_id 정수) ----------
+
+/** (type,childId) 키에 안정적인 정수 document_id를 매긴다(없으면 발급). */
+export function assignDocId(type: DocType, childId: string | null): number {
+  const key = docKey(type, childId);
+  let id = state.docIdByKey.get(key);
+  if (id == null) {
+    id = state.docSeq += 1;
+    state.docIdByKey.set(key, id);
+  }
+  return id;
+}
+
+/** document_id → (type,childId) 역해소. 없으면 null. */
+export function resolveDocId(
+  id: number,
+): { type: DocType; childId: string | null } | null {
+  const found = Array.from(state.docIdByKey.entries()).find(
+    ([, value]) => value === id,
+  );
+  if (!found) return null;
+  const key = found[0];
+  const idx = key.indexOf(":");
+  return {
+    type: key.slice(0, idx) as DocType,
+    childId: key.slice(idx + 1) === "class" ? null : key.slice(idx + 1),
+  };
+}
+
+/** 특정 (type,childId) 문서를 조회(있으면). id 없이 키로 직접 접근. */
+export function getDocByTarget(
+  type: DocType,
+  childId: string | null,
+): DocumentDraft | null {
+  return state.documents.get(docKey(type, childId)) ?? null;
+}
+
+/** EP-012 목록: 조건에 맞는 (id, doc) 쌍을 반환. */
+export function listDocuments(filter: {
+  type?: DocType;
+  childId?: string | null;
+  status?: DocStatus;
+}): { id: number; doc: DocumentDraft }[] {
+  const out: { id: number; doc: DocumentDraft }[] = [];
+  Array.from(state.documents.entries()).forEach(([key, doc]) => {
+    const idx = key.indexOf(":");
+    const cid = key.slice(idx + 1);
+    const childId = cid === "class" ? null : cid;
+    if (filter.type && doc.type !== filter.type) return;
+    if (filter.childId !== undefined && childId !== filter.childId) return;
+    if (filter.status && doc.status !== filter.status) return;
+    out.push({ id: assignDocId(doc.type, childId), doc });
+  });
+  return out;
 }

@@ -1,12 +1,48 @@
-import { api } from "@/lib/api/client";
+import { ApiError, api } from "@/lib/api/client";
+import type { ListEnvelope } from "@/lib/api/client";
+import {
+  childIdToInt,
+  consultIdToInt,
+  decodeSpecRecord,
+  docTypeFromSpec,
+  docTypeToSpec,
+  domainFromSpec,
+  domainToSpec,
+  encodeRecordToSpec,
+  intToChildId,
+  intToConsultId,
+  intToRecordId,
+  recordIdToInt,
+  summaryFromSpec,
+  summaryToSpec,
+} from "@/lib/api/spec";
+import type {
+  SpecChecklist,
+  SpecChild,
+  SpecConsult,
+  SpecDocType,
+  SpecDocument,
+  SpecDocumentListItem,
+  SpecDomain,
+  SpecMetrics,
+  SpecObservations,
+  SpecPhoto,
+  SpecPhotoList,
+  SpecRecord,
+  SpecSettings,
+} from "@/lib/api/spec";
+import { TODAY } from "@/lib/constants";
+import { DEV_DOMAINS } from "@/lib/types";
 import type {
   AppSettings,
   ChecklistData,
   Child,
   ConsultData,
+  ConsultSession,
   DailyRecord,
   DailyRecordInput,
   DevelopmentDomain,
+  DocStatus,
   DocType,
   DocumentDraft,
   LoginInput,
@@ -15,125 +51,558 @@ import type {
   NoticeQueue,
   ObservationData,
   ObservationEntry,
+  Photo,
   PhotoInbox,
   RecordSummary,
 } from "@/lib/types";
 
-/** API 함수 계층 — EP 번호는 스토리보드 명세 매핑 */
+/**
+ * API seam — 화면이 쓰는 UI 타입과 명세(final_API_명세서.md) 와이어 계약 사이의
+ * 유일한 번역 지점이다. 함수 시그니처(입·출력 UI 타입)는 그대로 유지하고, 내부에서
+ * 명세 엔드포인트를 호출·매핑한다. 목이든 실 백엔드든 이 파일만 통과한다.
+ */
 
-// EP-001
-export const login = (input: LoginInput) =>
-  api.post<LoginResponse>("/auth/login", input);
+// 아바타 색은 명세에 없는 표현 데이터 — child_id로 결정적으로 파생한다(db 팔레트와 동일 순서).
+const AVATAR_COLORS = [
+  "#2E7D52",
+  "#3D6FA8",
+  "#B0713A",
+  "#7C5CB0",
+  "#3A8F8A",
+  "#BE4F3F",
+];
 
-// EP-004
-export const fetchChildren = () => api.get<Child[]>("/children");
+const colorFor = (childIdInt: number) => {
+  // child_id 정수로 팔레트를 결정적으로 고른다(값 범위 무관, 음수 방어 포함).
+  const len = AVATAR_COLORS.length;
+  return AVATAR_COLORS[((childIdInt % len) + len) % len];
+};
 
-// EP-008
-export const fetchRecordSummary = () =>
-  api.get<RecordSummary>("/records/summary");
+// ---------- 매퍼 (명세 와이어 → UI 타입) ----------
 
-// EP-007-B — 같은 날짜·아이 기록이 있으면 수정 모드
-export const fetchDailyRecord = (childId: string, date: string) =>
-  api.get<{ record: DailyRecord | null }>(
-    `/records?child=${childId}&date=${date}`,
+function mapChild(c: SpecChild): Child {
+  return {
+    id: intToChildId(c.child_id),
+    name: c.name,
+    birthDate: c.birth,
+    gender: c.gender ?? "남",
+    guardian: c.guardian ?? "",
+    allergy: c.allergy ?? undefined,
+    color: colorFor(c.child_id),
+    recorded: c.recorded ?? false,
+    attending: c.attending ?? true,
+  };
+}
+
+function mapDoc(spec: SpecDocument): DocumentDraft {
+  return {
+    type: docTypeFromSpec(spec.type),
+    childId: spec.child_id ? intToChildId(spec.child_id) : null,
+    label: spec.label ?? "",
+    content: spec.draft,
+    working: spec.working ?? spec.final ?? spec.draft,
+    status: spec.status,
+    editDistance:
+      spec.edit_distance == null ? null : Math.round(spec.edit_distance * 100),
+    generatedAt: spec.created_at,
+  };
+}
+
+function mapPhoto(p: SpecPhoto): Photo {
+  return {
+    id: p.photo_id,
+    icon: p.icon ?? "🧒",
+    status: p.status === "sent" ? "classified" : p.status,
+    childId: p.matched_child_id ? intToChildId(p.matched_child_id) : null,
+    similarity: p.similarity == null ? null : Math.round(p.similarity * 100),
+    takenAt: p.taken_at ?? "",
+    sent: p.status === "sent",
+  };
+}
+
+// ---------- 인증 (EP-001, r6: 미구현) ----------
+//
+// 서버에 인증 엔드포인트(EP-001~003 `/api/auth/*`)가 아직 없다(명세 r6 1.2절) —
+// 호출하면 404다. 백엔드가 모든 요청을 고정 데모 교사로 처리하므로, 로그인은
+// 서버를 부르지 않고 클라이언트에서 데모 세션을 만들어 진행한다. 인증이 붙는
+// 시점에 이 함수만 EP-001 호출로 바꾸면 되고, 업무 API 계약은 그대로다.
+export const login = async (_input: LoginInput): Promise<LoginResponse> => {
+  return {
+    token: "session",
+    teacher: {
+      name: "데모 교사",
+      role: "담임",
+      className: "햇님반",
+    },
+  };
+};
+
+// ---------- 아동 (EP-004) ----------
+
+export const fetchChildren = async (): Promise<Child[]> => {
+  const list = await api.get<ListEnvelope<SpecChild>>("/children");
+  return list.items.map(mapChild);
+};
+
+// ---------- 오늘 홈 현황 (여러 명세 EP 합성) ----------
+
+export const fetchRecordSummary = async (): Promise<RecordSummary> => {
+  const [children, recs, pending, photos] = await Promise.all([
+    fetchChildren(),
+    api.get<ListEnvelope<SpecRecord>>(`/records?date=${TODAY}`),
+    api.get<ListEnvelope<SpecDocumentListItem>>(
+      "/documents?type=notice&status=draft",
+    ),
+    api.get<SpecPhotoList>("/photos"),
+  ]);
+  return {
+    done: recs.total,
+    total: children.length,
+    pendingDocs: pending.total,
+    unclassifiedPhotos: photos.items.filter((p) => p.status === "unmatched")
+      .length,
+  };
+};
+
+// ---------- 하루 기록 (EP-008 조회 / EP-007 저장) ----------
+
+export const fetchDailyRecord = async (
+  childId: string,
+  date: string,
+): Promise<{ record: DailyRecord | null }> => {
+  const list = await api.get<ListEnvelope<SpecRecord>>(
+    `/records?child_id=${childIdToInt(childId)}&date=${date}`,
   );
+  const spec = list.items[0];
+  if (!spec) return { record: null };
+  return {
+    record: {
+      childId,
+      date,
+      ...decodeSpecRecord(spec),
+      savedAt: `${date}T13:30:00`,
+    },
+  };
+};
 
-// EP-007
-export const saveDailyRecord = (input: DailyRecordInput) =>
-  api.post<{ ok: boolean }>("/records", input);
+// 특정 날짜에 하루 기록이 있는 아이들의 UI id 집합 — "기록 완료" 판정용(EP-008).
+// 실 서버 ChildOut에는 recorded 플래그가 없으므로, 그날 records를 조회해 채운다.
+export const fetchDayRecordChildIds = async (
+  date: string,
+): Promise<string[]> => {
+  const list = await api.get<ListEnvelope<SpecRecord>>(`/records?date=${date}`);
+  return list.items.map((r) => intToChildId(r.child_id));
+};
 
-// EP-010
-export const fetchDocumentDraft = (
+export const saveDailyRecord = async (
+  input: DailyRecordInput,
+): Promise<{ ok: boolean }> => {
+  await api.post<SpecRecord>("/records", {
+    child_id: childIdToInt(input.childId),
+    date: input.date,
+    ...encodeRecordToSpec(input),
+  });
+  return { ok: true };
+};
+
+// ---------- 문서 (EP-010~015) ----------
+
+/** UI는 문서를 (type,childId)로 다룬다 — 명세의 document_id로 해소한다(EP-012). */
+async function resolveDocumentId(
+  type: DocType,
+  childId: string | null,
+): Promise<number | null> {
+  const params = new URLSearchParams({ type: docTypeToSpec(type) });
+  if (childId) params.set("child_id", String(childIdToInt(childId)));
+  const list = await api.get<ListEnvelope<SpecDocumentListItem>>(
+    `/documents?${params.toString()}`,
+  );
+  return list.items[0]?.document_id ?? null;
+}
+
+export const fetchDocumentDraft = async (
   type: DocType,
   childId: string | null,
   regenerate = false,
-) => {
-  const params = new URLSearchParams({ type });
-  if (childId) params.set("child", childId);
-  if (regenerate) params.set("regen", "1");
-  return api.get<DocumentDraft>(`/documents/draft?${params}`);
+): Promise<DocumentDraft> => {
+  if (!regenerate) {
+    const id = await resolveDocumentId(type, childId);
+    if (id != null) {
+      return mapDoc(await api.get<SpecDocument>(`/documents/${id}`));
+    }
+  }
+  const body: {
+    type: SpecDocType;
+    child_id?: number;
+    date?: string;
+    period_from?: string;
+    period_to?: string;
+  } = { type: docTypeToSpec(type) };
+  if (childId) body.child_id = childIdToInt(childId);
+  if (type === "notice" || type === "journal") body.date = TODAY;
+  if (type === "plan") {
+    body.period_from = "2026-07-13";
+    body.period_to = "2026-07-17";
+  }
+  return mapDoc(await api.post<SpecDocument>("/documents/generate", body));
 };
 
-// EP-012
-export const fetchNoticeQueue = () =>
-  api.get<NoticeQueue>("/documents/notices/queue");
-
-// EP-011 — 기록 있는 아이 전원 초안 일괄 생성
-export const generateAllNotices = () =>
-  api.post<{ created: number; total: number }>(
-    "/documents/notices/generate-all",
+export const fetchNoticeQueue = async (): Promise<NoticeQueue> => {
+  const [children, recs, notices] = await Promise.all([
+    fetchChildren(),
+    api.get<ListEnvelope<SpecRecord>>(`/records?date=${TODAY}`),
+    api.get<ListEnvelope<SpecDocumentListItem>>("/documents?type=notice"),
+  ]);
+  const recordedIds = new Set(recs.items.map((r) => r.child_id));
+  const statusByChild = new Map<number, DocStatus>(
+    notices.items.map((n) => [n.child_id ?? -1, n.status]),
   );
+  const withRecord = children.filter((c) =>
+    recordedIds.has(childIdToInt(c.id)),
+  );
+  const queue = withRecord.map((c) => ({
+    childId: c.id,
+    name: c.name,
+    color: c.color,
+    status: statusByChild.get(childIdToInt(c.id)) ?? ("draft" as DocStatus),
+  }));
+  return {
+    generated: queue.length,
+    total: children.length,
+    confirmed: queue.filter((q) => q.status !== "draft").length,
+    sent: queue.filter((q) => q.status === "sent").length,
+    queue,
+    excluded: children
+      .filter((c) => !recordedIds.has(childIdToInt(c.id)))
+      .map((c) => c.name),
+  };
+};
 
-// EP-013
-export const saveWorkingCopy = (
+export const generateAllNotices = async (): Promise<{
+  created: number;
+  total: number;
+}> => {
+  const res = await api.post<{
+    generated: unknown[];
+    failed: unknown[];
+  }>("/documents/generate", { type: "notice", scope: "class", date: TODAY });
+  return {
+    created: res.generated.length,
+    total: res.generated.length + res.failed.length,
+  };
+};
+
+export const saveWorkingCopy = async (
   type: DocType,
   childId: string | null,
   content: string,
-) => api.put<{ ok: boolean }>("/documents/working", { type, childId, content });
+): Promise<{ ok: boolean }> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null) return { ok: false };
+  await api.put(`/documents/${id}/draft`, { working: content });
+  return { ok: true };
+};
 
-// EP-014
-export const confirmDocument = (
+export const confirmDocument = async (
   type: DocType,
   childId: string | null,
   content: string,
-) => api.post<DocumentDraft>("/documents/confirm", { type, childId, content });
+): Promise<DocumentDraft> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null)
+    throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+  return mapDoc(
+    await api.post<SpecDocument>(`/documents/${id}/confirm`, {
+      final: content,
+    }),
+  );
+};
 
-// EP-015 — 알림장만 사용
-export const sendDocument = (type: DocType, childId: string | null) =>
-  api.post<{ ok: boolean }>("/documents/send", { type, childId });
+export const sendDocument = async (
+  type: DocType,
+  childId: string | null,
+): Promise<{ ok: boolean }> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null) return { ok: false };
+  await api.post(`/documents/${id}/send`);
+  return { ok: true };
+};
 
-// EP-016
-export const uploadPhotos = () =>
-  api.post<{ ok: boolean; added: number }>("/photos/upload");
+// ---------- 사진 (EP-016~019) ----------
 
-// EP-017
-export const fetchPhotoInbox = () => api.get<PhotoInbox>("/photos");
+export const uploadPhotos = async (): Promise<{
+  ok: boolean;
+  added: number;
+}> => {
+  const res = await api.post<ListEnvelope<SpecPhoto>>("/photos");
+  return { ok: true, added: res.total };
+};
 
-// EP-018
-export const assignPhoto = (photoId: number, childId: string) =>
-  api.post<{ ok: boolean }>("/photos/assign", { photoId, childId });
+export const fetchPhotoInbox = async (): Promise<PhotoInbox> => {
+  const res = await api.get<SpecPhotoList>("/photos");
+  const photos = res.items.map(mapPhoto);
+  return {
+    photos,
+    classified: photos.filter((p) => p.status === "classified").length,
+    classifying: photos.filter((p) => p.status === "classifying").length,
+    unmatched: photos.filter((p) => p.status === "unmatched").length,
+    total: photos.length,
+  };
+};
 
-// EP-019
-export const sendPhotos = (ids: number[]) =>
-  api.post<{ sent: number }>("/photos/send", { ids });
+export const assignPhoto = async (
+  photoId: number,
+  childId: string,
+): Promise<{ ok: boolean }> => {
+  await api.put(`/photos/${photoId}/assign`, {
+    child_id: childIdToInt(childId),
+  });
+  return { ok: true };
+};
 
-// EP-005
-export const fetchObservations = (childId: string) =>
-  api.get<ObservationData>(`/observations?child=${childId}`);
+export const sendPhotos = async (ids: number[]): Promise<{ sent: number }> => {
+  const res = await api.post<{ sent: number[]; sent_at: string }>(
+    "/photos/send",
+    { photo_ids: ids },
+  );
+  return { sent: res.sent.length };
+};
 
-// EP-009
-export const updateObservationTag = (
+// 서버 다중 발달영역 태그 → UI 도메인 배열(빈/미매핑 제거). 매트릭스와 리스트가
+// 어긋나지 않도록 관찰 기록의 태그는 전체를 보존한다.
+const domainsFromSpec = (specTags: SpecDomain[] = []): DevelopmentDomain[] =>
+  specTags
+    .map((t) => domainFromSpec(t))
+    .filter((t): t is DevelopmentDomain => t != null);
+
+// ---------- 관찰 (EP-005 조회 / EP-009 태그 / 관찰 직접 추가) ----------
+
+export const fetchObservations = async (
+  childId: string,
+): Promise<ObservationData> => {
+  const spec = await api.get<SpecObservations>(
+    `/children/${childIdToInt(childId)}/observations`,
+  );
+  return {
+    domains: DEV_DOMAINS.map((name) => ({
+      name,
+      count: spec.matrix[domainToSpec(name) as SpecDomain] ?? 0,
+    })),
+    timeline: spec.timeline.map((o) => ({
+      id: intToRecordId(o.record_id),
+      childId,
+      date: o.date,
+      tag: domainFromSpec(o.dev_domain_tags[0]),
+      tags: domainsFromSpec(o.dev_domain_tags),
+      manualTag: o.tags_edited,
+      memo: o.note,
+    })),
+  };
+};
+
+export const updateObservationTag = async (
   id: string,
   tag: DevelopmentDomain | null,
-) => api.post<ObservationEntry>("/observations/tag", { id, tag });
+): Promise<ObservationEntry> => {
+  const res = await api.put<{
+    record_id: number;
+    dev_domain_tags: SpecDomain[];
+    tags_edited: boolean;
+  }>(`/records/${recordIdToInt(id)}/tags`, {
+    dev_domain_tags: tag ? [domainToSpec(tag)] : [],
+  });
+  // UI는 이 반환값을 쓰지 않고 관찰 쿼리를 무효화한다(childId/date/memo는 재조회로 채워짐).
+  return {
+    id,
+    childId: "",
+    date: TODAY,
+    tag: domainFromSpec(res.dev_domain_tags[0]),
+    tags: domainsFromSpec(res.dev_domain_tags),
+    manualTag: res.tags_edited,
+    memo: "",
+  };
+};
 
-// EP-020 — 관찰 기록 직접 추가
-export const addObservation = (
+// 관찰은 곧 하루 기록이다(명세: 관찰 누적 = records). 서버에는 관찰 전용 POST가
+// 없으므로(POST /children/{id}/observations → 405) 하루 기록을 만든다. 서버가
+// note로 발달영역을 자동 태깅하므로, 교사가 태그를 직접 골랐다면 기록 생성 후
+// EP-009로 그 태그를 덮어써 수동 태그(tags_edited)로 박제한다.
+//
+// ⚠️ POST /records는 (child_id, date) 풀 업서트라, 부분 필드만 보내면 기존
+// activity·meal·nap이 null로 덮여 그날 하루 기록이 파괴된다. 따라서 먼저 같은
+// 날짜의 기존 기록을 조회해 병합한 뒤 전체 레코드를 보낸다(데이터 손실 방지).
+export const addObservation = async (
   childId: string,
   tag: DevelopmentDomain | null,
   memo: string,
-) => api.post<ObservationEntry>("/observations", { childId, tag, memo });
+): Promise<ObservationEntry> => {
+  const specTag = tag ? domainToSpec(tag) : null;
+  const cid = childIdToInt(childId);
+  const existing = (
+    await api.get<ListEnvelope<SpecRecord>>(
+      `/records?child_id=${cid}&date=${TODAY}`,
+    )
+  ).items[0];
+  const rec = await api.post<SpecRecord>("/records", {
+    child_id: cid,
+    date: TODAY,
+    // 하루 기록 필드는 기존 값을 보존한다(관찰 추가가 덮어쓰지 않도록)
+    activity: existing?.activity ?? "",
+    meal: existing?.meal ?? "",
+    nap: existing?.nap ?? "",
+    note: memo,
+    dev_domain_tags: specTag ? [specTag] : (existing?.dev_domain_tags ?? []),
+  });
+  let tags: SpecDomain[] = rec.dev_domain_tags ?? [];
+  let edited = rec.tags_edited ?? false;
+  if (specTag) {
+    const upd = await api.put<{
+      record_id: number;
+      dev_domain_tags: SpecDomain[];
+      tags_edited: boolean;
+    }>(`/records/${rec.record_id}/tags`, { dev_domain_tags: [specTag] });
+    tags = upd.dev_domain_tags;
+    edited = upd.tags_edited;
+  }
+  return {
+    id: intToRecordId(rec.record_id),
+    childId,
+    date: rec.date,
+    tag: domainFromSpec(tags[0]),
+    tags: domainsFromSpec(tags),
+    manualTag: edited,
+    memo: rec.note ?? memo,
+  };
+};
 
-// EP-024 · EP-006
-export const fetchConsults = (childId: string) =>
-  api.get<ConsultData>(`/consults?child=${childId}`);
+// ---------- 상담 (EP-006 조회 / EP-025 확정) ----------
 
-// EP-025
-export const confirmConsult = (id: string, summary: string) =>
-  api.post<{ ok: boolean }>("/consults/confirm", { id, summary });
+function mapConsult(c: SpecConsult, childId: string): ConsultSession {
+  return {
+    id: intToConsultId(c.consult_id),
+    childId,
+    date: c.created_at.slice(0, 10),
+    topic: c.topic ?? "",
+    transcript: c.transcript ?? [],
+    summaryDraft: c.summary_draft ?? "",
+    summaryFinal: c.summary_final ? summaryFromSpec(c.summary_final) : null,
+    status: c.status === "confirmed" ? "confirmed" : "draft",
+  };
+}
 
-// EP-026
-export const fetchChecklist = () => api.get<ChecklistData>("/checklist");
+export const fetchConsults = async (childId: string): Promise<ConsultData> => {
+  const list = await api.get<ListEnvelope<SpecConsult>>(
+    `/children/${childIdToInt(childId)}/consults`,
+  );
+  const sessions = list.items.map((c) => mapConsult(c, childId));
+  return {
+    current: sessions.find((s) => s.status === "draft") ?? sessions[0] ?? null,
+    history: sessions,
+  };
+};
 
-// EP-028
-export const fetchMetrics = () => api.get<MetricsSummary>("/metrics/summary");
+export const confirmConsult = async (
+  id: string,
+  summary: string,
+): Promise<{ ok: boolean }> => {
+  await api.post(`/consults/${consultIdToInt(id)}/confirm`, {
+    summary_final: summaryToSpec(summary),
+  });
+  return { ok: true };
+};
 
-// EP-032 — 로컬 양식(서식) 동기화: 노트북 폴더에서 읽은 서식을 백엔드에 반영
-export const syncTemplates = (templates: Partial<Record<DocType, string>>) =>
-  api.post<{ ok: boolean; applied: string[] }>("/templates", { templates });
+// ---------- 평가제 체크리스트 (EP-026) ----------
 
-// EP-029 ~ EP-031
-export const fetchSettings = () => api.get<AppSettings>("/settings");
-export const setReplayMode = (on: boolean) =>
-  api.post<{ ok: boolean }>("/settings/replay", { on });
-export const reloadSeed = () => api.post<{ ok: boolean }>("/settings/seed");
+export const fetchChecklist = async (): Promise<ChecklistData> => {
+  const spec = await api.get<SpecChecklist>("/checklist");
+  return {
+    items: spec.items.map((i) => ({
+      id: i.id ?? i.indicator,
+      ok: i.status === "met",
+      title: i.indicator,
+      desc: i.hint ?? "",
+    })),
+    met: spec.met,
+    total: spec.total,
+    missingObservations: spec.missing_observations ?? [],
+  };
+};
+
+// ---------- 지표 (EP-028) ----------
+
+const fmtMinutes = (m: number | null | undefined): string => {
+  if (m == null) return "-";
+  const total = Math.round(m * 60);
+  return `${Math.floor(total / 60)}분 ${String(total % 60).padStart(2, "0")}초`;
+};
+
+const DOC_LABEL_KO: Record<string, string> = {
+  notice: "알림장",
+  journal: "보육일지",
+  weekly_plan: "주간 계획안",
+  monthly_plan: "월간 계획안",
+  dev_eval: "발달평가서",
+};
+
+export const fetchMetrics = async (): Promise<MetricsSummary> => {
+  const s = await api.get<SpecMetrics>("/metrics/summary");
+  const adoptionRate = Math.round((s.adoption_rate ?? 0) * 100);
+  const combinedRate = Math.round((s.minor_edit_rate ?? 0) * 100);
+  // 확정 문서가 없으면 서버는 분포·단축률·비용을 null로 준다(명세 EP-028 예외 1).
+  // 빈 상태에서도 화면이 깨지지 않도록 모든 파생 필드를 null 가드한다.
+  const timeReduction = s.time_reduction_rate ?? {};
+  const baselines = s.baseline_minutes ?? {};
+  return {
+    adoptionRate,
+    minorEditGainPt: combinedRate - adoptionRate,
+    combinedRate,
+    editDistribution: Object.values(s.edit_rate_distribution ?? {}),
+    timeSavings: Object.keys(timeReduction).map((k) => {
+      const base = baselines[k] ?? 0;
+      const red = timeReduction[k];
+      return {
+        docType: DOC_LABEL_KO[k] ?? k,
+        baseline: fmtMinutes(base),
+        actual: fmtMinutes(base * (1 - red)),
+        reductionPct: Math.round(red * 100),
+      };
+    }),
+    perDocTime: fmtMinutes(s.avg_minutes_per_doc),
+    taggingMatchRate: Math.round((s.tagging_agreement_rate ?? 0) * 100),
+    monthlyCost:
+      s.token_cost?.krw != null
+        ? `월 ${s.token_cost.krw.toLocaleString()}원`
+        : "-",
+    dailyConfirmed: s.daily_confirmed ?? [],
+  };
+};
+
+// ---------- 설정·시드 (EP-029~031) + 로컬 양식 동기화 ----------
+
+export const fetchSettings = async (): Promise<AppSettings> => {
+  const s = await api.get<SpecSettings>("/settings");
+  return {
+    replayMode: s.replay_enabled,
+    models: { generate: s.generation_model, light: s.light_model },
+  };
+};
+
+export const setReplayMode = async (on: boolean): Promise<{ ok: boolean }> => {
+  await api.put("/settings/replay", { enabled: on });
+  return { ok: true };
+};
+
+export const reloadSeed = async (): Promise<{ ok: boolean }> => {
+  await api.post("/seed/load", { scenario: "default" });
+  return { ok: true };
+};
+
+// 로컬 양식 텍스트 동기화(데스크톱 부팅 시). r6에서 양식 등록은 EP-032
+// multipart 파일 업로드(.docx/.hwpx)로 바뀌었고 텍스트 JSON 계약은 사라졌다 —
+// 이 경로로 실 서버 `/templates`를 부르면 422다. 실제 양식 등록은 SCR-015의
+// 파일 업로드(별도 기능)로 하므로, 여기서는 서버를 부르지 않고 조용히 넘어간다.
+export const syncTemplates = async (
+  templates: Partial<Record<DocType, string>>,
+): Promise<{ ok: boolean; applied: string[] }> => {
+  return { ok: true, applied: Object.keys(templates) };
+};

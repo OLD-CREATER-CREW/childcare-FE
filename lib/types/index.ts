@@ -129,7 +129,11 @@ export type ObservationEntry = {
   id: string;
   childId: string;
   date: string;
+  /** 대표 태그(첫 번째) — 태그 편집 모달의 단일 선택 기준 */
   tag: DevelopmentDomain | null;
+  /** 이 기록의 전체 발달영역 태그 — 서버 자동 태깅은 다중 도메인을 준다.
+   *  도메인 매트릭스(막대그래프)와 어긋나지 않도록 리스트도 전체를 표시한다. */
+  tags: DevelopmentDomain[];
   /** 수동 태그 여부 — true면 자동 태깅이 덮어쓰지 않음 */
   manualTag: boolean;
   memo: string;
