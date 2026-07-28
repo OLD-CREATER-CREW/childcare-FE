@@ -1,0 +1,334 @@
+/**
+ * 명세(final_API_명세서.md) 와이어 계약 타입 + UI↔명세 매핑 규약.
+ *
+ * 여기 있는 타입은 "선을 타고 오가는" 실제 백엔드 계약이다(정수 ID·영문 enum·
+ * ISO 시각·{items,total} 봉투). 화면이 쓰는 UI 타입(lib/types)과의 변환은
+ * seam(lib/api/index.ts)이 담당하고, 목(mocks/*)도 이 타입으로 응답을 만든다.
+ *
+ * 순수 모듈(react·msw 의존 없음) — seam과 mock 양쪽에서 import한다.
+ */
+
+import type {
+  DailyRecordInput,
+  DevelopmentDomain,
+  DocType,
+  MealAmount,
+  NapQuality,
+} from "@/lib/types";
+
+// ---------- 발달영역(명세 EP-005) ----------
+
+/** 명세 영문 enum */
+export type SpecDomain =
+  "physical" | "communication" | "social" | "art" | "nature";
+
+const DOMAIN_TO_SPEC: Record<DevelopmentDomain, SpecDomain> = {
+  신체운동: "physical",
+  의사소통: "communication",
+  사회관계: "social",
+  예술경험: "art",
+  자연탐구: "nature",
+};
+
+const DOMAIN_FROM_SPEC: Record<SpecDomain, DevelopmentDomain> = {
+  physical: "신체운동",
+  communication: "의사소통",
+  social: "사회관계",
+  art: "예술경험",
+  nature: "자연탐구",
+};
+
+export const domainToSpec = (d: DevelopmentDomain | null): SpecDomain | null =>
+  d ? DOMAIN_TO_SPEC[d] : null;
+
+export const domainFromSpec = (d: SpecDomain | null | undefined) =>
+  d ? DOMAIN_FROM_SPEC[d] : null;
+
+// ---------- 문서 타입(명세 EP-010) ----------
+
+/** 명세 type enum. UI의 plan은 weekly_plan, evaluation은 dev_eval에 대응 */
+export type SpecDocType =
+  "notice" | "journal" | "weekly_plan" | "monthly_plan" | "dev_eval";
+
+const DOCTYPE_TO_SPEC: Record<DocType, SpecDocType> = {
+  notice: "notice",
+  journal: "journal",
+  plan: "weekly_plan",
+  evaluation: "dev_eval",
+};
+
+const DOCTYPE_FROM_SPEC: Record<SpecDocType, DocType> = {
+  notice: "notice",
+  journal: "journal",
+  weekly_plan: "plan",
+  monthly_plan: "plan",
+  dev_eval: "evaluation",
+};
+
+export const docTypeToSpec = (t: DocType): SpecDocType => DOCTYPE_TO_SPEC[t];
+export const docTypeFromSpec = (t: SpecDocType): DocType =>
+  DOCTYPE_FROM_SPEC[t];
+
+// ---------- ID 브리지 (UI 문자열 ↔ 명세 정수) ----------
+//
+// 목 시드가 "c01"·"o001"·"cs1" 형태의 문자열 키를 쓰므로, 와이어에서 요구하는
+// 정수 ID와 1:1 대응시킨다. 접두 오프셋으로 종류를 구분해 충돌을 막는다.
+
+const CHILD_BASE = 100; // c01 → 101
+const RECORD_BASE = 5000; // o001(관찰=기록) → 5001
+const CONSULT_BASE = 7000; // cs1 → 7001
+
+export const childIdToInt = (id: string): number =>
+  CHILD_BASE + Number(id.replace(/\D/g, ""));
+export const intToChildId = (n: number): string =>
+  `c${String(n - CHILD_BASE).padStart(2, "0")}`;
+
+export const recordIdToInt = (id: string): number =>
+  RECORD_BASE + Number(id.replace(/\D/g, ""));
+export const intToRecordId = (n: number): string =>
+  `o${String(n - RECORD_BASE).padStart(3, "0")}`;
+
+export const consultIdToInt = (id: string): number =>
+  CONSULT_BASE + Number(id.replace(/\D/g, ""));
+export const intToConsultId = (n: number): string => `cs${n - CONSULT_BASE}`;
+
+// ---------- 와이어 응답 타입 ----------
+
+export type SpecList<T> = { items: T[]; total: number };
+
+/** EP-001 / EP-003 */
+export type SpecUser = {
+  user_id: number;
+  name: string;
+  role: "teacher" | "director";
+  center_id: number;
+  center_name: string;
+};
+
+/** EP-004 (+ 목 부가 필드: 명세 응답의 상위집합, 실 백엔드는 무시 가능) */
+export type SpecChild = {
+  child_id: number;
+  name: string;
+  birth: string;
+  class_name: string;
+  // --- 목 부가(표현/현황) ---
+  gender?: "남" | "여";
+  guardian?: string;
+  allergy?: string | null;
+  recorded?: boolean;
+  attending?: boolean;
+};
+
+/** EP-007 / EP-008 하루 기록 */
+export type SpecRecord = {
+  record_id: number;
+  child_id: number;
+  date: string;
+  activity?: string;
+  meal?: string;
+  nap?: string;
+  note?: string;
+  keywords?: string[];
+  dev_domain_tags?: SpecDomain[];
+  tags_edited?: boolean;
+  audio_key?: string | null;
+  created?: boolean;
+};
+
+/** EP-005 관찰 누적 */
+export type SpecObservationItem = {
+  record_id: number;
+  date: string;
+  note: string;
+  dev_domain_tags: SpecDomain[];
+  tags_edited: boolean;
+};
+
+export type SpecObservations = {
+  child_id: number;
+  matrix: Record<SpecDomain, number>;
+  timeline: SpecObservationItem[];
+  total: number;
+};
+
+/** EP-010 / EP-011 문서 */
+export type SpecDocument = {
+  document_id: number;
+  type: SpecDocType;
+  status: "draft" | "confirmed" | "sent";
+  child_id?: number | null;
+  draft: string;
+  working?: string | null;
+  final?: string | null;
+  edit_distance?: number | null;
+  source_record_ids?: number[];
+  citations?: unknown[];
+  created_at: string;
+  confirmed_at?: string | null;
+  sent_at?: string | null;
+  // --- 목 부가(화면 라벨) ---
+  label?: string;
+};
+
+/** EP-012 문서 목록 항목 */
+export type SpecDocumentListItem = {
+  document_id: number;
+  type: SpecDocType;
+  status: "draft" | "confirmed" | "sent";
+  child_id?: number | null;
+  created_at: string;
+};
+
+/** EP-016 / EP-017 사진 */
+export type SpecPhoto = {
+  photo_id: number;
+  file_key: string;
+  status: "classifying" | "classified" | "unmatched" | "sent";
+  matched_child_id: number | null;
+  similarity?: number | null;
+  selected?: boolean;
+  sent_at?: string | null;
+  // --- 목 부가(실사진 대체 아이콘) ---
+  icon?: string;
+  taken_at?: string;
+};
+
+export type SpecPhotoList = SpecList<SpecPhoto> & { pending: number };
+
+/** EP-006 상담 */
+export type SpecConsultSummary = {
+  core: string;
+  requests: string;
+  follow_up: string;
+};
+
+export type SpecConsult = {
+  consult_id: number;
+  child_id?: number;
+  created_at: string;
+  status: "transcribing" | "summarizing" | "draft" | "confirmed" | "stt_failed";
+  summary_draft?: string | null;
+  summary_final?: SpecConsultSummary | null;
+  // --- 목 부가(화면 표시) ---
+  topic?: string;
+  transcript?: { speaker: string; text: string }[];
+};
+
+/** EP-026 평가제 체크리스트 */
+export type SpecChecklistItem = {
+  indicator: string;
+  indicator_ref?: string;
+  required_doc_type?: string;
+  period?: string;
+  status: "met" | "missing";
+  found?: number;
+  needed?: number;
+  hint?: string;
+  // --- 목 부가 ---
+  id?: string;
+};
+
+export type SpecChecklist = SpecList<SpecChecklistItem> & {
+  met: number;
+  missing: number;
+  missing_observations?: string[];
+};
+
+/** EP-028 지표 */
+export type SpecMetrics = {
+  confirmed_count: number;
+  adopted_count: number;
+  adoption_rate: number | null;
+  adoption_threshold: number;
+  minor_edit_rate: number | null;
+  edit_rate_avg: number | null;
+  edit_rate_distribution: Record<string, number>;
+  avg_minutes_per_doc: number | null;
+  baseline_minutes: Record<string, number>;
+  time_reduction_rate: Record<string, number>;
+  tagging_agreement_rate: number | null;
+  token_cost: {
+    tokens_in: number;
+    tokens_out: number;
+    krw?: number;
+    source: string;
+  };
+  // --- 목 부가(최근 확정 추이) ---
+  daily_confirmed?: { date: string; count: number }[];
+};
+
+/** EP-029 설정 */
+export type SpecSettings = {
+  replay_enabled: boolean;
+  generation_model: string;
+  light_model: string;
+};
+
+// ---------- 하루 기록 인코딩 ----------
+//
+// UI 하루 기록은 백엔드보다 구조가 풍부하다(activities[]·점심/간식 분리·낮잠 상태).
+// 명세 record는 activity·meal·nap·note 문자열뿐이므로, 왕복 손실을 막기 위해
+// seam·mock 양쪽이 이 한 쌍으로만 인·디코딩한다(계약은 문자열, 복원은 규칙).
+
+type RecordWireFields = {
+  activity: string;
+  meal: string;
+  nap: string;
+  note: string;
+};
+
+export function encodeRecordToSpec(input: DailyRecordInput): RecordWireFields {
+  return {
+    activity: input.activities.join(", "),
+    meal: `점심: ${input.lunch} / 간식: ${input.snack}`,
+    nap: `${input.napFrom}~${input.napTo} (${input.napQuality})`,
+    note: input.memo,
+  };
+}
+
+/** 명세 record 문자열 → UI 구조 필드. 규칙에 안 맞으면 안전한 기본값으로 복원. */
+export function decodeSpecRecord(spec: Partial<RecordWireFields>): {
+  activities: string[];
+  lunch: MealAmount;
+  snack: MealAmount;
+  napFrom: string;
+  napTo: string;
+  napQuality: NapQuality;
+  memo: string;
+} {
+  const activities = (spec.activity ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const meal = /점심:\s*(.+?)\s*\/\s*간식:\s*(.+)/.exec(spec.meal ?? "");
+  const nap = /(\d{2}:\d{2})~(\d{2}:\d{2})\s*\((.+)\)/.exec(spec.nap ?? "");
+  return {
+    activities,
+    lunch: (meal?.[1]?.trim() ?? "다 먹음") as MealAmount,
+    snack: (meal?.[2]?.trim() ?? "다 먹음") as MealAmount,
+    napFrom: nap?.[1] ?? "12:40",
+    napTo: nap?.[2] ?? "14:00",
+    napQuality: (nap?.[3]?.trim() ?? "잘 잤어요") as NapQuality,
+    memo: spec.note ?? "",
+  };
+}
+
+// ---------- 상담 요약 3단 구조(명세 EP-006/025) ----------
+
+/** UI는 요약을 한 문자열로 다루고, 명세는 core·requests·follow_up 3키 객체다. */
+export function summaryToSpec(text: string): SpecConsultSummary {
+  const pick = (label: string) => {
+    const m = new RegExp(`${label}\\s*[—-]\\s*(.+)`).exec(text);
+    return m?.[1]?.trim() ?? "";
+  };
+  const core = pick("핵심");
+  return {
+    core: core || text.trim(),
+    requests: pick("요청사항"),
+    follow_up: pick("후속조치"),
+  };
+}
+
+export function summaryFromSpec(s: SpecConsultSummary): string {
+  return `핵심 — ${s.core}\n요청사항 — ${s.requests}\n후속조치 — ${s.follow_up}`;
+}
