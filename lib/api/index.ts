@@ -1,4 +1,4 @@
-import { ApiError, api } from "@/lib/api/client";
+import { ApiError, api, tokenStore } from "@/lib/api/client";
 import type { ListEnvelope } from "@/lib/api/client";
 import {
   childIdToInt,
@@ -17,6 +17,7 @@ import {
   summaryToSpec,
 } from "@/lib/api/spec";
 import type {
+  SpecAuthTokens,
   SpecChecklist,
   SpecChild,
   SpecConsult,
@@ -27,16 +28,25 @@ import type {
   SpecMetrics,
   SpecObservations,
   SpecPhoto,
+  SpecChildDetail,
+  SpecPasswordChange,
   SpecPhotoList,
   SpecRecord,
+  SpecRefresh,
   SpecSettings,
+  SpecUser,
+  SpecUserAccount,
 } from "@/lib/api/spec";
 import { TODAY } from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
 import type {
   AppSettings,
+  AuthUser,
   ChecklistData,
   Child,
+  ChildProfile,
+  ChildProfileInput,
+  ChildStatus,
   ConsultData,
   ConsultSession,
   DailyRecord,
@@ -46,14 +56,19 @@ import type {
   DocType,
   DocumentDraft,
   LoginInput,
-  LoginResponse,
   MetricsSummary,
   NoticeQueue,
   ObservationData,
   ObservationEntry,
+  PasswordChangeInput,
+  PasswordChangeResult,
   Photo,
   PhotoInbox,
   RecordSummary,
+  SignupInput,
+  UserAccount,
+  UserAccountInput,
+  UserAccountPatch,
 } from "@/lib/types";
 
 /**
@@ -84,13 +99,17 @@ function mapChild(c: SpecChild): Child {
   return {
     id: intToChildId(c.child_id),
     name: c.name,
+    // (r7) 실 서버는 male/female로 준다 — 화면 표기는 한글이라 여기서 옮긴다.
+    gender: c.gender === "female" || c.gender === "여" ? "여" : "남",
     birthDate: c.birth,
-    gender: c.gender ?? "남",
     guardian: c.guardian ?? "",
     allergy: c.allergy ?? undefined,
     color: colorFor(c.child_id),
     recorded: c.recorded ?? false,
     attending: c.attending ?? true,
+    className: c.class_name,
+    // (r7) 목록 기본 조회는 재원만 주므로, 값이 없으면 재원으로 본다.
+    status: c.status ?? "enrolled",
   };
 }
 
@@ -120,36 +139,253 @@ function mapPhoto(p: SpecPhoto): Photo {
   };
 }
 
-// ---------- 인증 (EP-001, r6: 미구현) ----------
+// ---------- 인증 (EP-001·002·003·050·051) ----------
 //
-// 서버에 인증 엔드포인트(EP-001~003 `/api/auth/*`)가 아직 없다(명세 r6 1.2절) —
-// 호출하면 404다. 백엔드가 모든 요청을 고정 데모 교사로 처리하므로, 로그인은
-// 서버를 부르지 않고 클라이언트에서 데모 세션을 만들어 진행한다. 인증이 붙는
-// 시점에 이 함수만 EP-001 호출로 바꾸면 되고, 업무 API 계약은 그대로다.
-export const login = async (_input: LoginInput): Promise<LoginResponse> => {
+// 명세 r11 1.2: 액세스 JWT(15분) + 리프레시 토큰(12시간). 토큰은 응답 본문으로
+// 오며, 액세스는 메모리·리프레시는 localStorage에 둔다(client.ts tokenStore).
+// 업무 API의 401 자동 갱신도 client.ts가 처리하므로 화면은 신경 쓰지 않는다.
+
+function mapUser(u: SpecUser): AuthUser {
   return {
-    token: "session",
-    teacher: {
-      name: "데모 교사",
-      role: "담임",
-      className: "햇님반",
-    },
+    userId: u.user_id,
+    name: u.name,
+    role: u.role,
+    centerId: u.center_id,
+    centerName: u.center_name,
   };
+}
+
+/** 로그인·가입 응답의 토큰 두 개를 보관한다(명세 1.2.3 ⑤⑥) */
+function storeSession(res: SpecAuthTokens): AuthUser {
+  tokenStore.setAccess(res.access_token);
+  tokenStore.setRefresh(res.refresh_token);
+  return mapUser(res.user);
+}
+
+/** EP-001 POST /api/auth/login — 인증 배관이라 Bearer·자동 갱신을 붙이지 않는다 */
+export const login = async (input: LoginInput): Promise<AuthUser> => {
+  const res = await api.post<SpecAuthTokens>("/auth/login", input, {
+    skipAuth: true,
+  });
+  return storeSession(res);
 };
 
-// ---------- 로그아웃 (EP-002) ----------
+/** EP-051 POST /api/auth/signup — 기관 + 첫 원장 계정. 성공 시 곧바로 로그인 상태 */
+export const signup = async (input: SignupInput): Promise<AuthUser> => {
+  const res = await api.post<SpecAuthTokens>(
+    "/auth/signup",
+    {
+      center_name: input.centerName,
+      username: input.username,
+      password: input.password,
+      name: input.name,
+    },
+    { skipAuth: true },
+  );
+  return storeSession(res);
+};
 
+/** EP-050 POST /api/auth/refresh — 앱 기동 시 저장된 리프레시 토큰으로 세션 복구(명세 1.2.3 ③) */
+export const restoreSession = async (): Promise<AuthUser | null> => {
+  const refreshToken = tokenStore.refresh;
+  if (!refreshToken) return null;
+  try {
+    const res = await api.post<SpecRefresh>(
+      "/auth/refresh",
+      { refresh_token: refreshToken },
+      { skipAuth: true },
+    );
+    tokenStore.setAccess(res.access_token);
+    // 갱신 응답에도 user가 담기지만, 서버 구현에 따라 빠질 수 있어 EP-003으로 보완한다.
+    return res.user ? mapUser(res.user) : await fetchMe();
+  } catch (e) {
+    // 401은 되살릴 수 없는 상태다 — 저장한 토큰을 지운다(명세 EP-050).
+    // 네트워크 오류(ApiError가 아님)면 토큰을 남겨 두고 다음 기동에서 다시 시도한다.
+    if (e instanceof ApiError) tokenStore.clear();
+    return null;
+  }
+};
+
+/** EP-003 GET /api/auth/me */
+export const fetchMe = async (): Promise<AuthUser> =>
+  mapUser(await api.get<SpecUser>("/auth/me"));
+
+/** EP-002 POST /api/auth/logout — 서버는 리프레시 토큰만 폐기하므로 클라이언트가 둘 다 지운다 */
 export const logout = async (): Promise<{ ok: boolean }> => {
-  await api.post("/auth/logout");
+  const refreshToken = tokenStore.refresh;
+  try {
+    if (refreshToken) {
+      await api.post("/auth/logout", { refresh_token: refreshToken });
+    }
+  } finally {
+    // 서버 응답과 무관하게 지운다 — 지우지 않으면 최대 15분간 유효한 액세스
+    // 토큰이 남는다(명세 EP-002 경고).
+    tokenStore.clear();
+  }
   return { ok: true };
 };
 
-// ---------- 아동 (EP-004) ----------
+/** EP-049 POST /api/auth/password — 본인 비밀번호 변경 */
+export const changeMyPassword = async (
+  input: PasswordChangeInput,
+): Promise<PasswordChangeResult> => {
+  const res = await api.post<SpecPasswordChange>("/auth/password", {
+    current_password: input.currentPassword,
+    new_password: input.newPassword,
+    // 지금 쓰는 기기만 살린다. 이걸 보내지 않으면 자기 세션까지 끊긴다.
+    keep_refresh_token: tokenStore.refresh,
+  });
+  // 비밀번호가 바뀌면 token_version이 올라가 기존 액세스 토큰이 전부 무효가 된다.
+  // 응답의 새 토큰으로 교체하지 않으면 **다음 요청부터 401**이다(명세 1.2.3 ⑧).
+  tokenStore.setAccess(res.access_token);
+  if (res.refresh_token) tokenStore.setRefresh(res.refresh_token);
+  return { revokedSessions: res.revoked_sessions };
+};
+
+// ---------- 아동 목록 (EP-004) ----------
 
 export const fetchChildren = async (): Promise<Child[]> => {
   const list = await api.get<ListEnvelope<SpecChild>>("/children");
   return list.items.map(mapChild);
 };
+
+// ---------- 아동 인적사항 (FN-021 / EP-039~042) ----------
+
+const GENDER_TO_SPEC = { 남: "male", 여: "female" } as const;
+
+function mapChildProfile(c: SpecChildDetail): ChildProfile {
+  return {
+    id: intToChildId(c.child_id),
+    name: c.name,
+    birthDate: c.birth ?? "",
+    className: c.class_name ?? "",
+    gender: c.gender === "male" ? "남" : c.gender === "female" ? "여" : null,
+    status: c.status,
+    enrolledAt: c.enrolled_at ?? "",
+    withdrawnAt: c.withdrawn_at,
+    memo: c.memo ?? "",
+  };
+}
+
+/**
+ * UI 입력 → 명세 본문. 명세 EP-041: **키를 넣지 않은 것과 null을 보낸 것은 다르다.**
+ * 넣지 않으면 기존 값 유지, null이면 값을 비운다. 그래서 undefined는 키 자체를
+ * 빼고, 빈 문자열은 "비우기"로 보아 null로 바꿔 보낸다.
+ */
+function childProfileBody(
+  input: Partial<ChildProfileInput>,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name.trim();
+  if (input.birthDate !== undefined) body.birth = input.birthDate || null;
+  if (input.className !== undefined)
+    body.class_name = input.className.trim() || null;
+  if (input.gender !== undefined)
+    body.gender = input.gender ? GENDER_TO_SPEC[input.gender] : null;
+  if (input.enrolledAt !== undefined)
+    body.enrolled_at = input.enrolledAt || null;
+  if (input.memo !== undefined) body.memo = input.memo.trim() || null;
+  if (input.status !== undefined) body.status = input.status;
+  return body;
+}
+
+/** EP-004를 status 쿼리와 함께 부른다 — 기본은 재원만, `all`이면 퇴소 아동도 */
+export const fetchChildRoster = async (
+  status: ChildStatus | "all" = "enrolled",
+): Promise<Child[]> => {
+  const list = await api.get<ListEnvelope<SpecChild>>(
+    `/children?status=${status}`,
+  );
+  return list.items.map(mapChild);
+};
+
+/** EP-040 GET /api/children/{id} — 퇴소 아동도 조회된다 */
+export const fetchChildProfile = async (
+  childId: string,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.get<SpecChildDetail>(`/children/${childIdToInt(childId)}`),
+  );
+
+/** EP-039 POST /api/children — 원장 전용 */
+export const createChild = async (
+  input: ChildProfileInput,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.post<SpecChildDetail>("/children", childProfileBody(input)),
+  );
+
+/** EP-041 PATCH /api/children/{id} — 교사도 쓸 수 있다(반 배정·특이사항은 일상 업무) */
+export const updateChild = async (
+  childId: string,
+  input: Partial<ChildProfileInput>,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.patch<SpecChildDetail>(
+      `/children/${childIdToInt(childId)}`,
+      childProfileBody(input),
+    ),
+  );
+
+/** EP-042 DELETE /api/children/{id} — 원장 전용. 행을 지우지 않고 status만 바꾼다 */
+export const withdrawChild = async (childId: string): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.del<SpecChildDetail>(`/children/${childIdToInt(childId)}`),
+  );
+
+/** 퇴소 취소 — EP-041로 status를 되돌리면 withdrawn_at도 함께 지워진다(오조작 복구) */
+export const reenrollChild = (childId: string): Promise<ChildProfile> =>
+  updateChild(childId, { status: "enrolled" });
+
+// ---------- 계정 (FN-022 / EP-043~048) ----------
+
+function mapUserAccount(u: SpecUserAccount): UserAccount {
+  return {
+    userId: u.user_id,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    active: u.active,
+  };
+}
+
+/** EP-044 GET /api/users — 원장 전용. 기본은 잠긴 계정도 함께 준다 */
+export const fetchUsers = async (
+  activeOnly = false,
+): Promise<UserAccount[]> => {
+  const list = await api.get<ListEnvelope<SpecUserAccount>>(
+    activeOnly ? "/users?active=true" : "/users",
+  );
+  return list.items.map(mapUserAccount);
+};
+
+/** EP-043 POST /api/users — 원장 전용 */
+export const createUser = async (
+  input: UserAccountInput,
+): Promise<UserAccount> =>
+  mapUserAccount(await api.post<SpecUserAccount>("/users", input));
+
+/** EP-046 PATCH /api/users/{id} — 이름·역할·활성 상태만 */
+export const updateUser = async (
+  userId: number,
+  patch: UserAccountPatch,
+): Promise<UserAccount> =>
+  mapUserAccount(await api.patch<SpecUserAccount>(`/users/${userId}`, patch));
+
+/** EP-047 DELETE /api/users/{id} — 잠금(소프트 삭제). 그 사용자의 세션이 전부 끊긴다 */
+export const lockUser = async (userId: number): Promise<UserAccount> =>
+  mapUserAccount(await api.del<SpecUserAccount>(`/users/${userId}`));
+
+/** EP-048 POST /api/users/{id}/password — 원장이 재설정. 현재 비밀번호를 묻지 않는다 */
+export const resetUserPassword = async (
+  userId: number,
+  newPassword: string,
+): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.post<SpecUserAccount>(`/users/${userId}/password`, {
+      new_password: newPassword,
+    }),
+  );
 
 // ---------- 오늘 홈 현황 (여러 명세 EP 합성) ----------
 
@@ -581,6 +817,18 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
         ? `월 ${s.token_cost.krw.toLocaleString()}원`
         : "-",
     dailyConfirmed: s.daily_confirmed ?? [],
+    // (r9) 귀속 가능한 문서가 하나도 없으면 서버가 null을 준다.
+    byUser: (s.by_user ?? []).map((u) => ({
+      userId: u.user_id,
+      name: u.name,
+      confirmedCount: u.confirmed_count,
+      adoptionRate:
+        u.adoption_rate == null ? null : Math.round(u.adoption_rate * 100),
+      editRateAvgPct:
+        u.edit_rate_avg == null ? null : Math.round(u.edit_rate_avg * 100),
+      perDocTime: fmtMinutes(u.avg_minutes_per_doc),
+    })),
+    unattributedCount: s.unattributed_count ?? 0,
   };
 };
 

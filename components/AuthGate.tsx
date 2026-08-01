@@ -6,8 +6,9 @@ import { useApp } from "@/lib/store";
 
 /**
  * 인증 게이트 — (main) 셸을 감싼다.
- * 로그인 세션이 없으면 /login으로 돌려보내고, 하이드레이션 전에는 판단을 미룬다.
- * 실서비스에서는 서버가 세션 쿠키로 가드하지만, 목 데모에서는 클라이언트 상태로 게이팅한다.
+ * 기동 시 저장된 리프레시 토큰으로 세션 복구(EP-050)를 시도하고, 그 판정이 끝나기
+ * 전에는 화면을 잠시 잡아 둔다(명세 1.2.3 ③). 복구에 실패하면 /login으로 보낸다.
+ * 화면 게이팅은 편의이고, 실제 판정은 서버가 401로 한다.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { auth, authReady } = useApp();

@@ -3,10 +3,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as apiFn from "@/lib/api";
 import type {
+  ChildProfileInput,
+  ChildStatus,
   DailyRecordInput,
   DevelopmentDomain,
   DocType,
   LoginInput,
+  PasswordChangeInput,
+  SignupInput,
+  UserAccountInput,
+  UserAccountPatch,
 } from "@/lib/types";
 
 /** TanStack Query 훅 계층 — 화면은 이 훅만 사용 */
@@ -26,6 +32,11 @@ export const queryKeys = {
   checklist: ["checklist"] as const,
   metrics: ["metrics", "summary"] as const,
   settings: ["settings"] as const,
+  /** SCR-016 — 재원/퇴소 필터가 다르면 다른 목록이다 */
+  childRoster: (status: ChildStatus | "all") =>
+    ["children", "roster", status] as const,
+  childProfile: (childId: string) => ["children", "profile", childId] as const,
+  users: (activeOnly: boolean) => ["users", activeOnly] as const,
 };
 
 // ---- Queries ----
@@ -103,8 +114,23 @@ export const useMetrics = () =>
 
 // ---- Mutations ----
 
-export const useLogin = () =>
-  useMutation({ mutationFn: (input: LoginInput) => apiFn.login(input) });
+export const useLogin = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LoginInput) => apiFn.login(input),
+    // 앞 사용자의 캐시가 남으면 다른 기관 자료가 잠깐 비친다
+    onSuccess: () => qc.clear(),
+  });
+};
+
+/** SCR-018 원장 회원가입(EP-051) — 성공하면 곧바로 로그인 상태가 된다 */
+export const useSignup = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SignupInput) => apiFn.signup(input),
+    onSuccess: () => qc.clear(),
+  });
+};
 
 export const useLogout = () => {
   const qc = useQueryClient();
@@ -112,6 +138,139 @@ export const useLogout = () => {
     mutationFn: apiFn.logout,
     // 다른 계정으로 다시 로그인해도 이전 세션의 서버 캐시가 남지 않도록 비운다
     onSettled: () => qc.clear(),
+  });
+};
+
+/** EP-049 본인 비밀번호 변경 — 토큰 교체는 seam이 처리한다 */
+export const useChangePassword = () =>
+  useMutation({
+    mutationFn: (input: PasswordChangeInput) => apiFn.changeMyPassword(input),
+  });
+
+// ---- FN-021 아동 인적사항 (SCR-016) ----
+
+export const useChildRoster = (status: ChildStatus | "all") =>
+  useQuery({
+    queryKey: queryKeys.childRoster(status),
+    queryFn: () => apiFn.fetchChildRoster(status),
+  });
+
+export const useChildProfile = (childId: string | null) =>
+  useQuery({
+    queryKey: queryKeys.childProfile(childId ?? ""),
+    queryFn: () => apiFn.fetchChildProfile(childId as string),
+    enabled: !!childId,
+    staleTime: 0,
+  });
+
+/** 명단이 바뀌면 아이 목록에 기대는 화면(홈 현황·알림장 대기열)도 함께 무효화한다 */
+function invalidateRoster(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["children"] });
+  qc.invalidateQueries({ queryKey: queryKeys.recordSummary });
+  qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
+}
+
+export const useCreateChild = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ChildProfileInput) => apiFn.createChild(input),
+    onSuccess: () => invalidateRoster(qc),
+  });
+};
+
+export const useUpdateChild = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      childId,
+      input,
+    }: {
+      childId: string;
+      input: Partial<ChildProfileInput>;
+    }) => apiFn.updateChild(childId, input),
+    onSuccess: (_d, { childId }) => {
+      invalidateRoster(qc);
+      qc.invalidateQueries({ queryKey: queryKeys.childProfile(childId) });
+    },
+  });
+};
+
+export const useWithdrawChild = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (childId: string) => apiFn.withdrawChild(childId),
+    onSuccess: (_d, childId) => {
+      invalidateRoster(qc);
+      qc.invalidateQueries({ queryKey: queryKeys.childProfile(childId) });
+    },
+  });
+};
+
+export const useReenrollChild = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (childId: string) => apiFn.reenrollChild(childId),
+    onSuccess: (_d, childId) => {
+      invalidateRoster(qc);
+      qc.invalidateQueries({ queryKey: queryKeys.childProfile(childId) });
+    },
+  });
+};
+
+// ---- FN-022 계정 관리 (SCR-017, 원장 전용) ----
+
+export const useUsers = (activeOnly: boolean, enabled = true) =>
+  useQuery({
+    queryKey: queryKeys.users(activeOnly),
+    queryFn: () => apiFn.fetchUsers(activeOnly),
+    enabled,
+    retry: false,
+  });
+
+const invalidateUsers = (qc: ReturnType<typeof useQueryClient>) =>
+  qc.invalidateQueries({ queryKey: ["users"] });
+
+export const useCreateUser = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UserAccountInput) => apiFn.createUser(input),
+    onSuccess: () => invalidateUsers(qc),
+  });
+};
+
+export const useUpdateUser = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      userId,
+      patch,
+    }: {
+      userId: number;
+      patch: UserAccountPatch;
+    }) => apiFn.updateUser(userId, patch),
+    onSuccess: () => invalidateUsers(qc),
+  });
+};
+
+export const useLockUser = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) => apiFn.lockUser(userId),
+    onSuccess: () => invalidateUsers(qc),
+  });
+};
+
+export const useResetUserPassword = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      userId,
+      newPassword,
+    }: {
+      userId: number;
+      newPassword: string;
+    }) => apiFn.resetUserPassword(userId, newPassword),
+    onSuccess: () => invalidateUsers(qc),
   });
 };
 

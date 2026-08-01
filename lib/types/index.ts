@@ -10,6 +10,10 @@ export type Child = {
   guardian: string;
   /** 알레르기 등 급식 유의사항 */
   allergy?: string;
+  /** 반 이름 (EP-004 `class_name`) */
+  className?: string;
+  /** (r7) 재원·퇴소. EP-004 기본 조회는 재원만 준다 */
+  status?: ChildStatus;
   /** 아바타 배경 색상 토큰 (hex) */
   color: string;
   /** 오늘 하루 기록 작성 여부 */
@@ -201,15 +205,111 @@ export type MetricsSummary = {
   monthlyCost: string;
   /** 최근 14일 일별 확정 문서 수 */
   dailyConfirmed: { date: string; count: number }[];
+  /** (r9) 확정자별 채택률·수정률 — 줄 세우기가 아니라 문체 적합도 단서다 */
+  byUser: {
+    userId: number;
+    name: string;
+    confirmedCount: number;
+    adoptionRate: number | null;
+    editRateAvgPct: number | null;
+    perDocTime: string;
+  }[];
+  /** (r9) 확정자가 비어 byUser 분모에서 빠진 문서 수(시드·r9 이전 문서) */
+  unattributedCount: number;
 };
 
 // ---------- 인증·설정 ----------
 
 export type LoginInput = { username: string; password: string };
 
-export type LoginResponse = {
-  token: string;
-  teacher: { name: string; role: string; className: string };
+/** SCR-018 원장 회원가입(EP-051) — 기관과 첫 원장 계정을 함께 만든다 */
+export type SignupInput = {
+  centerName: string;
+  username: string;
+  password: string;
+  name: string;
+};
+
+export type UserRole = "teacher" | "director";
+
+/** 명세 EP-001·003·050 응답의 `user` — 로그인한 사용자와 소속 기관 */
+export type AuthUser = {
+  userId: number;
+  name: string;
+  role: UserRole;
+  centerId: number;
+  centerName: string;
+};
+
+/** 역할 표시 문구 — 서버 값은 영문 상수, 화면에는 한글로 보인다 */
+export const ROLE_LABEL: Record<UserRole, string> = {
+  teacher: "보육교사",
+  director: "원장",
+};
+
+// ---------- FN-021 아동 인적사항 관리 (SCR-016) ----------
+
+export type ChildStatus = "enrolled" | "withdrawn";
+
+/** EP-040 인적사항 전체 — 목록(Child)보다 넓다 */
+export type ChildProfile = {
+  id: string;
+  name: string;
+  birthDate: string;
+  className: string;
+  gender: "남" | "여" | null;
+  status: ChildStatus;
+  enrolledAt: string;
+  withdrawnAt: string | null;
+  memo: string;
+};
+
+/** EP-039 등록 · EP-041 수정 입력 — 이름만 필수, 나머지는 나중에 채운다 */
+export type ChildProfileInput = {
+  name: string;
+  birthDate?: string;
+  className?: string;
+  gender?: "남" | "여" | null;
+  enrolledAt?: string;
+  memo?: string;
+  status?: ChildStatus;
+};
+
+// ---------- FN-022 계정 관리 (SCR-017) ----------
+
+/** EP-043~048 계정. 비밀번호는 어떤 응답에도 실리지 않는다 */
+export type UserAccount = {
+  userId: number;
+  username: string;
+  name: string;
+  role: UserRole;
+  active: boolean;
+};
+
+/** EP-043 계정 생성 — center_id는 보내지 않는다(원장 본인 기관에 만들어진다) */
+export type UserAccountInput = {
+  username: string;
+  password: string;
+  name: string;
+  role: UserRole;
+};
+
+/** EP-046 부분 수정 — 아이디·비밀번호는 여기서 바꿀 수 없다 */
+export type UserAccountPatch = {
+  name?: string;
+  role?: UserRole;
+  active?: boolean;
+};
+
+/** EP-049 본인 비밀번호 변경 */
+export type PasswordChangeInput = {
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type PasswordChangeResult = {
+  /** 이번 변경으로 끊긴 다른 기기의 세션 수 */
+  revokedSessions: number;
 };
 
 export type AppSettings = {

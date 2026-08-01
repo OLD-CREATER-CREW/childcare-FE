@@ -8,14 +8,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { tokenStore } from "@/lib/api/client";
+import { restoreSession } from "@/lib/api";
+import type { AuthUser } from "@/lib/types";
 
 /** 클라이언트 UI 전역 상태 — 토스트 · 재생 모드 · 명세 주석 + 로그인 세션
- * (서버 데이터는 TanStack Query, 로그인 세션은 여기서 localStorage로 지속) */
-
-/** 로그인한 교사 세션 — 실서비스의 세션 쿠키 대신 데모에서는 이 값으로 게이팅 */
-export type AuthSession = { name: string; role: string; className: string };
-
-const AUTH_KEY = "childcare.auth";
+ * (서버 데이터는 TanStack Query, 인증 토큰은 lib/api/client.ts의 tokenStore) */
 
 type AppContextValue = {
   replay: boolean;
@@ -25,11 +23,11 @@ type AppContextValue = {
   toast: (msg: string) => void;
   toastMsg: string;
   toastShow: boolean;
-  /** 로그인 세션 — null이면 미로그인 */
-  auth: AuthSession | null;
-  /** localStorage 하이드레이션 완료 여부 — 이전엔 게이트가 판단을 미룬다 */
+  /** 로그인한 사용자 — null이면 미로그인 */
+  auth: AuthUser | null;
+  /** 기동 시 세션 복구(EP-050) 완료 여부 — 이전엔 게이트가 판단을 미룬다 */
   authReady: boolean;
-  signIn: (session: AuthSession) => void;
+  signIn: (user: AuthUser) => void;
   signOut: () => void;
 };
 
@@ -42,35 +40,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [toastShow, setToastShow] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
-  // 로그인 세션 — SSR에는 localStorage가 없으므로 마운트 후 하이드레이션한다.
-  const [auth, setAuth] = useState<AuthSession | null>(null);
+  // 로그인 세션 — 액세스 토큰은 메모리에만 있으므로(명세 1.2.3 ②) 새로고침하면
+  // 매번 사라진다. 저장된 리프레시 토큰으로 EP-050을 한 번 부르는 것이 정상 기동
+  // 순서다(명세 1.2.3 ③) — 앱을 켤 때마다 로그인 화면부터 띄우지 않는다.
+  const [auth, setAuth] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(AUTH_KEY);
-      if (raw) setAuth(JSON.parse(raw) as AuthSession);
-    } catch {
-      /* 손상된 값이면 미로그인으로 간주 */
-    }
-    setAuthReady(true);
+    let alive = true;
+    restoreSession()
+      .then((user) => {
+        if (alive) setAuth(user);
+      })
+      .finally(() => {
+        if (alive) setAuthReady(true);
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const signIn = useCallback((session: AuthSession) => {
-    setAuth(session);
-    try {
-      localStorage.setItem(AUTH_KEY, JSON.stringify(session));
-    } catch {
-      /* 저장 실패해도 이 세션 동안은 메모리 상태로 동작 */
-    }
+  // 갱신까지 실패해 되살릴 수 없는 401 — 어느 화면에서 났든 세션을 비운다.
+  // 리다이렉트는 AuthGate가 맡는다.
+  useEffect(() => {
+    tokenStore.onSessionExpired(() => setAuth(null));
+    return () => tokenStore.onSessionExpired(null);
   }, []);
 
+  // 토큰 자체는 API 계층(tokenStore)이 이미 보관했다 — 여기서는 화면 상태만 든다.
+  const signIn = useCallback((user: AuthUser) => setAuth(user), []);
+
+  // EP-002가 실패했더라도 토큰을 남기지 않는다 — 남기면 최대 15분간 유효한
+  // 액세스 토큰이 살아 있다(명세 EP-002 경고). clear는 여러 번 불러도 안전하다.
   const signOut = useCallback(() => {
+    tokenStore.clear();
     setAuth(null);
-    try {
-      localStorage.removeItem(AUTH_KEY);
-    } catch {
-      /* noop */
-    }
   }, []);
 
   // 명세 주석 토글 — body 클래스로 전 화면 제어 (globals.css의 body.annot 셀렉터)

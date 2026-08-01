@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Sprout } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useLogin } from "@/lib/queries";
+import { ApiError } from "@/lib/api/client";
 import { N, Notice, SpecBar, Toast } from "@/components/ui";
 
 // SCR-001 로그인 — 셸 밖의 단독 화면. "실제 아동 정보 입력 금지" 상시 고지(REQ-NF-007)
@@ -15,6 +17,7 @@ export default function LoginPage() {
   const loginMutation = useLogin();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
 
   // 이미 로그인된 세션이면 로그인 화면을 건너뛴다
   useEffect(() => {
@@ -23,14 +26,26 @@ export default function LoginPage() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
+    if (!username.trim() || !password) {
+      setError("아이디와 비밀번호를 입력해 주세요.");
+      return;
+    }
     loginMutation.mutate(
-      { username, password },
+      { username: username.trim(), password },
       {
-        onSuccess: ({ teacher }) => {
-          signIn(teacher);
-          toast(`${teacher.name}, 환영합니다`);
+        onSuccess: (user) => {
+          signIn(user);
+          toast(`${user.name}님, 환영합니다`);
           router.replace("/");
         },
+        // 명세 EP-001: 아이디·비밀번호 중 어느 쪽이 틀렸는지 구분해 알리지 않는다.
+        onError: (e) =>
+          setError(
+            e instanceof ApiError
+              ? e.message
+              : "서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.",
+          ),
       },
     );
   };
@@ -89,6 +104,14 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+          {error && (
+            <p
+              role="alert"
+              className="mb-3 text-[12.5px] font-semibold text-coral"
+            >
+              {error}
+            </p>
+          )}
           <button
             type="submit"
             className="btn primary big mt-2 w-full"
@@ -97,6 +120,15 @@ export default function LoginPage() {
             <N n={3} />
             {loginMutation.isPending ? "로그인 중…" : "로그인"}
           </button>
+          {/* ⑤ 어린이집 등록 링크(스토리보드 r10) — 계정 생성은 원장 전용이라
+              새 어린이집은 이 경로로만 시작할 수 있다 */}
+          <p className="mt-4 text-center text-[13px] text-muted">
+            <N n={5} />
+            처음이신가요?{" "}
+            <Link href="/signup" className="font-bold text-green underline">
+              어린이집 등록하기
+            </Link>
+          </p>
           <div className="mt-5">
             <Notice kind="warn">
               ⚠{" "}
