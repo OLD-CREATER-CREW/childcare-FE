@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  Baby,
   BarChart3,
   Bell,
   BookOpen,
@@ -11,6 +12,7 @@ import {
   Camera,
   CheckSquare,
   Home,
+  KeyRound,
   LogOut,
   Mail,
   Menu,
@@ -20,10 +22,13 @@ import {
   Settings,
   Sprout,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
+import { ROLE_LABEL } from "@/lib/types";
 import { useLogout, useRecordSummary } from "@/lib/queries";
+import { PasswordChangeDialog } from "@/components/PasswordChangeDialog";
 import { Toast } from "@/components/ui";
 
 type NavItem = {
@@ -32,6 +37,8 @@ type NavItem = {
   label: string;
   scr: string;
   badge?: (pendingDocs: number, unclassified: number) => number;
+  /** 원장 계정에만 보이는 메뉴(명세 1.2.1) */
+  directorOnly?: boolean;
 };
 
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -94,6 +101,20 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { href: "/settings", icon: Settings, label: "설정", scr: "014" },
     ],
   },
+  {
+    group: "원 관리",
+    items: [
+      { href: "/children", icon: Baby, label: "아동 관리", scr: "016" },
+      // 계정 관리는 원장 계정에만 메뉴가 보인다(스토리보드 SCR-017)
+      {
+        href: "/users",
+        icon: Users,
+        label: "계정 관리",
+        scr: "017",
+        directorOnly: true,
+      },
+    ],
+  },
 ];
 
 const BOTTOM_TABS = [
@@ -111,11 +132,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const summaryQuery = useRecordSummary();
 
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const teacherName = auth?.name ?? TEACHER_NAME;
-  const teacherRole = auth?.role ?? "담임";
+  const teacherRole = auth ? ROLE_LABEL[auth.role] : "담임";
+  const isDirector = auth?.role === "director";
 
-  // 로그아웃 — 서버 세션 종료를 시도하되, 성공 여부와 무관하게 클라이언트 세션을
-  // 비우고 로그인 화면으로 돌려보낸다(데모에서 항상 닫히는 루프).
+  // 로그아웃(EP-002) — 서버는 리프레시 토큰만 폐기한다. 저장한 토큰 두 개를 지우는
+  // 것은 API 계층이 맡고, 여기서는 화면 상태를 비우고 로그인 화면으로 돌려보낸다.
+  // 서버 응답 실패와 무관하게 닫히는 루프여야 한다.
   const doLogout = () =>
     logoutMutation.mutate(undefined, {
       onSettled: () => {
@@ -150,7 +174,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           어린이집 AI 행정비서
         </div>
         <span className="top-date text-[13px] text-muted">
-          {TODAY_LABEL} · {CLASS_NAME}
+          {/* 기관명은 로그인 응답의 center_name — 세션 전 잠깐만 상수로 채운다 */}
+          {TODAY_LABEL} · {auth?.centerName ?? CLASS_NAME}
         </span>
         <div className="flex-1" />
         {replay && <span className="replay-pill">▶ 재생 모드</span>}
@@ -185,26 +210,38 @@ export function Shell({ children }: { children: React.ReactNode }) {
         {NAV.map((g) => (
           <div key={g.group}>
             <div className="nav-group">{g.group}</div>
-            {g.items.map((it) => {
-              const Icon = it.icon;
-              const cnt = it.badge?.(pendingDocs, unclassified) ?? 0;
-              return (
-                <Link
-                  key={it.href}
-                  href={it.href}
-                  className={`nav-item ${path === it.href ? "active" : ""}`}
-                >
-                  <Icon size={17} className="ico w-5 flex-none" />
-                  {it.label}
-                  {cnt > 0 ? <span className="cnt">{cnt}</span> : null}
-                  <span className="nav-scr">{it.scr}</span>
-                </Link>
-              );
-            })}
+            {g.items
+              .filter((it) => !it.directorOnly || isDirector)
+              .map((it) => {
+                const Icon = it.icon;
+                const cnt = it.badge?.(pendingDocs, unclassified) ?? 0;
+                return (
+                  <Link
+                    key={it.href}
+                    href={it.href}
+                    className={`nav-item ${path === it.href ? "active" : ""}`}
+                  >
+                    <Icon size={17} className="ico w-5 flex-none" />
+                    {it.label}
+                    {cnt > 0 ? <span className="cnt">{cnt}</span> : null}
+                    <span className="nav-scr">{it.scr}</span>
+                  </Link>
+                );
+              })}
           </div>
         ))}
         <div className="mt-auto">
           <div className="nav-group">계정</div>
+          {/* EP-049 — 교사·원장 모두 쓴다(명세 1.2.1) */}
+          <button
+            type="button"
+            className="nav-item w-full text-left"
+            onClick={() => setPasswordOpen(true)}
+          >
+            <KeyRound size={17} className="ico w-5 flex-none" />
+            비밀번호 변경
+            <span className="nav-scr">049</span>
+          </button>
           <button
             type="button"
             className="nav-item w-full text-left"
@@ -220,6 +257,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
       <main className="main">{children}</main>
 
+      <PasswordChangeDialog
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+      />
       <Toast />
 
       <nav className="bottomtab">
