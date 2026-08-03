@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api";
 import { useChangePassword } from "@/lib/queries";
 import { useApp } from "@/lib/store";
+import {
+  PASSWORD_ERROR,
+  PASSWORD_HINT,
+  PASSWORD_MIN_LENGTH,
+} from "@/lib/constants";
 import { Modal, Notice } from "@/components/ui";
 
 /**
@@ -26,19 +31,25 @@ export function PasswordChangeDialog({
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
 
+  // 열 때와 **닫을 때** 모두 비운다 — 닫은 뒤 상태에 남은 평문 비밀번호는
+  // DevTools·힙 스냅샷에 그대로 노출된다.
   useEffect(() => {
-    if (open) {
-      setCurrentPassword("");
-      setNewPassword("");
-      setError("");
-    }
+    setCurrentPassword("");
+    setNewPassword("");
+    setError("");
   }, [open]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (newPassword.length < 8) {
-      setError("새 비밀번호는 8자 이상이어야 합니다.");
+    // 빈 값을 그대로 보내면 서버가 400 PASSWORD_MISMATCH를 주는데, 그러면
+    // "입력 안 함"인데 "비밀번호가 틀렸다"고 오인시킨다.
+    if (!currentPassword) {
+      setError("현재 비밀번호를 입력해 주세요.");
+      return;
+    }
+    if (newPassword.length < PASSWORD_MIN_LENGTH) {
+      setError(PASSWORD_ERROR);
       return;
     }
     if (newPassword === currentPassword) {
@@ -90,7 +101,7 @@ export function PasswordChangeDialog({
             id="next-password"
             className="input"
             type="password"
-            placeholder="8자 이상"
+            placeholder={PASSWORD_HINT}
             autoComplete="new-password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}

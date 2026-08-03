@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Baby, Plus } from "lucide-react";
-import { ApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api";
 import {
   useChildProfile,
   useChildRoster,
@@ -12,7 +12,7 @@ import {
   useWithdrawChild,
 } from "@/lib/queries";
 import { useApp } from "@/lib/store";
-import type { ChildProfileInput } from "@/lib/types";
+import type { ChildProfile, ChildProfileInput } from "@/lib/types";
 import {
   ConfirmDialog,
   EmptyState,
@@ -45,6 +45,28 @@ const emptyForm: ChildProfileInput = {
   memo: "",
 };
 
+/**
+ * 원본과 달라진 항목만 골라낸다 — EP-041은 부분 수정이라 보내지 않은 키는 그대로
+ * 두기 때문이다. 폼 전체를 보내면 손대지 않은 값까지 매번 덮어쓰게 되고, 원본을
+ * 못 받은 상태라면 그 덮어쓰기가 곧 삭제가 된다.
+ */
+function changedFields(
+  profile: ChildProfile,
+  form: ChildProfileInput,
+): Partial<ChildProfileInput> {
+  const diff: Partial<ChildProfileInput> = {};
+  if (form.name.trim() !== profile.name) diff.name = form.name;
+  if ((form.birthDate ?? "") !== profile.birthDate)
+    diff.birthDate = form.birthDate;
+  if ((form.className ?? "") !== profile.className)
+    diff.className = form.className;
+  if ((form.gender ?? null) !== profile.gender) diff.gender = form.gender;
+  if ((form.enrolledAt ?? "") !== profile.enrolledAt)
+    diff.enrolledAt = form.enrolledAt;
+  if ((form.memo ?? "") !== profile.memo) diff.memo = form.memo;
+  return diff;
+}
+
 export default function ChildrenPage() {
   const { auth, toast } = useApp();
   const isDirector = auth?.role === "director";
@@ -69,10 +91,15 @@ export default function ChildrenPage() {
   const classNames = Array.from(
     new Set(roster.map((c) => c.className).filter(Boolean) as string[]),
   );
+  // 「퇴소 아동 보기」를 끄면 선택 중이던 반이 옵션에서 사라질 수 있다. 그대로 두면
+  // 목록이 0명이 되어 사용자는 "아이가 사라졌다"로 읽는다 — 없는 값이면 전체로 되돌린다.
+  const activeFilter = classNames.includes(classFilter)
+    ? classFilter
+    : ALL_CLASSES;
   const rows =
-    classFilter === ALL_CLASSES
+    activeFilter === ALL_CLASSES
       ? roster
-      : roster.filter((c) => c.className === classFilter);
+      : roster.filter((c) => c.className === activeFilter);
 
   // 단건 조회(EP-040)가 도착하면 폼을 채운다 — 목록에 없는 입소일·특이사항이 여기 있다
   const profile = profileQuery.data;
@@ -128,8 +155,16 @@ export default function ChildrenPage() {
         onError: onApiError,
       });
     } else if (panel?.mode === "edit") {
+      // 원본이 아직 없으면 저장하지 않는다 — 비교할 대상이 없으면 "안 고친 것"과
+      // "비운 것"을 구분할 수 없다.
+      if (!profile) return;
+      const input = changedFields(profile, form);
+      if (Object.keys(input).length === 0) {
+        closePanel();
+        return;
+      }
       updateMutation.mutate(
-        { childId: panel.childId, input: form },
+        { childId: panel.childId, input },
         {
           onSuccess: () => {
             toast("인적사항을 저장했습니다");
@@ -206,7 +241,7 @@ export default function ChildrenPage() {
             <Select
               className="w-[150px]"
               ariaLabel="반 필터"
-              value={classFilter}
+              value={activeFilter}
               onChange={setClassFilter}
               options={[
                 { value: ALL_CLASSES, label: "전체" },
@@ -267,7 +302,7 @@ export default function ChildrenPage() {
                       {c.birthDate || "—"}
                     </td>
                     <td>{c.className || "—"}</td>
-                    <td>{c.gender}</td>
+                    <td>{c.gender ?? "—"}</td>
                     <td>
                       {c.status === "withdrawn" ? (
                         <span className="tag daily">퇴소</span>
@@ -297,7 +332,14 @@ export default function ChildrenPage() {
             : (profile?.name ?? "인적사항")}
         </h3>
 
-        {panel?.mode === "edit" && profileQuery.isLoading ? (
+        {/* 수정 모드에서는 원본이 도착하기 전까지 폼을 열지 않는다.
+            빈 폼이 열리면 이름만 채워 저장했을 때 나머지 항목이 전부 지워진다
+            (EP-041에서 null = 비우기). 조회 실패는 재시도로 되돌린다. */}
+        {panel?.mode === "edit" && profileQuery.isError ? (
+          <div className="mt-4">
+            <QueryError onRetry={() => profileQuery.refetch()} />
+          </div>
+        ) : panel?.mode === "edit" && !profile ? (
           <Skeleton lines={4} />
         ) : (
           <div className="mt-4">

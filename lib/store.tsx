@@ -8,9 +8,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { tokenStore } from "@/lib/api/client";
-import { restoreSession } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { clearSession, onSessionExpired, restoreSession } from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
+
+/** 리프레시 토큰이 담긴 localStorage 키 — 탭 간 로그아웃 전파에만 쓴다 */
+const REFRESH_KEY = "childcare.refresh_token";
 
 /** 클라이언트 UI 전역 상태 — 토스트 · 재생 모드 · 명세 주석 + 로그인 세션
  * (서버 데이터는 TanStack Query, 인증 토큰은 lib/api/client.ts의 tokenStore) */
@@ -34,6 +37,7 @@ type AppContextValue = {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [replay, setReplay] = useState(false);
   const [annot, setAnnot] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
@@ -49,7 +53,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
     restoreSession()
       .then((user) => {
-        if (alive) setAuth(user);
+        // 복구가 느린 사이 사용자가 직접 로그인했을 수 있다. 그때 늦게 도착한
+        // 결과로 덮으면 방금 성공한 로그인이 취소되고 로그인 화면으로 되돌아간다.
+        if (alive) setAuth((prev) => prev ?? user);
       })
       .finally(() => {
         if (alive) setAuthReady(true);
@@ -62,17 +68,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // 갱신까지 실패해 되살릴 수 없는 401 — 어느 화면에서 났든 세션을 비운다.
   // 리다이렉트는 AuthGate가 맡는다.
   useEffect(() => {
-    tokenStore.onSessionExpired(() => setAuth(null));
-    return () => tokenStore.onSessionExpired(null);
+    onSessionExpired(() => {
+      setAuth(null);
+      // 만료 후 로그인 화면에서 대기하는 동안 아동 이름·특이사항이 메모리 캐시에
+      // 남아 있을 이유가 없다. 다음 사용자가 다른 사람일 수도 있다.
+      queryClient.clear();
+    });
+    return () => onSessionExpired(null);
+  }, [queryClient]);
+
+  // 다른 탭에서 로그아웃하면 이 탭도 함께 끊는다. localStorage의 리프레시 토큰만
+  // 지워질 뿐 이 탭의 메모리 액세스 토큰과 화면 상태는 그대로라, 놔두면 최대
+  // 15분간 이전 사용자의 이름·아동 명단이 계속 보인다(공용 태블릿에서 실제로 난다).
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === REFRESH_KEY && !e.newValue) {
+        clearSession();
+        setAuth(null);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // 토큰 자체는 API 계층(tokenStore)이 이미 보관했다 — 여기서는 화면 상태만 든다.
+  // 토큰 자체는 API 계층이 이미 보관했다 — 여기서는 화면 상태만 든다.
   const signIn = useCallback((user: AuthUser) => setAuth(user), []);
 
   // EP-002가 실패했더라도 토큰을 남기지 않는다 — 남기면 최대 15분간 유효한
-  // 액세스 토큰이 살아 있다(명세 EP-002 경고). clear는 여러 번 불러도 안전하다.
+  // 액세스 토큰이 살아 있다(명세 EP-002 경고). 여러 번 불러도 안전하다.
   const signOut = useCallback(() => {
-    tokenStore.clear();
+    clearSession();
     setAuth(null);
   }, []);
 

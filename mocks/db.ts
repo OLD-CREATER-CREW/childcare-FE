@@ -12,7 +12,6 @@ import type {
   DocStatus,
   DocType,
   DocumentDraft,
-  MetricsSummary,
   NoticeQueue,
   ObservationData,
   ObservationEntry,
@@ -612,21 +611,21 @@ function seedProfiles(children: Child[]): Map<string, ChildProfile> {
 function seedUsers(): UserAccount[] {
   return [
     {
-      userId: 11,
+      userId: "u11",
       username: "demo_director",
       name: "데모 원장",
       role: "director",
       active: true,
     },
     {
-      userId: 12,
+      userId: "u12",
       username: "demo_teacher",
       name: TEACHER_NAME,
       role: "teacher",
       active: true,
     },
     {
-      userId: 15,
+      userId: "u15",
       username: "lee_boyuk",
       name: "이보육 선생님",
       role: "teacher",
@@ -775,11 +774,26 @@ export function withdrawChildProfile(id: string): ChildProfile | undefined {
 
 // ---------- 계정 (FN-022 / EP-043~048) ----------
 
+/**
+ * 목 세션 — 지금 로그인한 사람이 누구인지. 자기 잠금 판정(SELF_LOCKOUT)과 역할
+ * 분기가 이 값에 걸린다. 실 서버는 토큰에서 읽지만 목은 토큰을 검증하지 않으므로
+ * 로그인할 때 여기에 적어 둔다.
+ */
+let sessionUserId = "u12";
+
+export function getSessionUser(): UserAccount {
+  return getUser(sessionUserId) ?? state.users[0];
+}
+
+export function setSessionUser(userId: string) {
+  sessionUserId = userId;
+}
+
 export function getUsers(activeOnly: boolean): UserAccount[] {
   return activeOnly ? state.users.filter((u) => u.active) : state.users;
 }
 
-export function getUser(userId: number): UserAccount | undefined {
+export function getUser(userId: string): UserAccount | undefined {
   return state.users.find((u) => u.userId === userId);
 }
 
@@ -789,7 +803,7 @@ export function hasUsername(username: string): boolean {
 
 export function createUserAccount(input: UserAccountInput): UserAccount {
   const user: UserAccount = {
-    userId: ++state.userSeq,
+    userId: `u${++state.userSeq}`,
     username: input.username,
     name: input.name,
     role: input.role,
@@ -800,7 +814,7 @@ export function createUserAccount(input: UserAccountInput): UserAccount {
 }
 
 export function updateUserAccount(
-  userId: number,
+  userId: string,
   patch: UserAccountPatch,
 ): UserAccount | undefined {
   const user = getUser(userId);
@@ -811,7 +825,7 @@ export function updateUserAccount(
 
 /** 마지막 활성 원장 보호(명세 1.2.2) — 강등·잠금이 원장 0명을 만들면 막는다 */
 export function wouldRemoveLastDirector(
-  userId: number,
+  userId: string,
   patch: UserAccountPatch,
 ): boolean {
   const target = getUser(userId);
@@ -1212,80 +1226,6 @@ export function getChecklist(): ChecklistData {
 }
 
 // ---------- 지표 ----------
-
-export function getMetrics(): MetricsSummary {
-  const confirmed = Array.from(state.documents.values()).filter(
-    (d) => d.status !== "draft" && d.editDistance !== null,
-  );
-  const seededDone = 34; // 파일럿 기간 누적(시드) — 이번 세션 확정분을 더해 집계
-  const zeroEdits =
-    21 + confirmed.filter((d) => (d.editDistance ?? 100) === 0).length;
-  const minorEdits =
-    7 +
-    confirmed.filter((d) => {
-      const e = d.editDistance ?? 100;
-      return e > 0 && e <= 10;
-    }).length;
-  const totalDocs = seededDone + confirmed.length;
-  const adoptionRate = Math.round((zeroEdits / totalDocs) * 100);
-  const combinedRate = Math.round(((zeroEdits + minorEdits) / totalDocs) * 100);
-  return {
-    adoptionRate,
-    minorEditGainPt: combinedRate - adoptionRate,
-    combinedRate,
-    editDistribution: [zeroEdits, minorEdits, 4, 3, 2, 1],
-    timeSavings: [
-      {
-        docType: "알림장",
-        baseline: "7분 05초",
-        actual: "3분 20초",
-        reductionPct: 53,
-      },
-      {
-        docType: "보육일지",
-        baseline: "18분 00초",
-        actual: "7분 01초",
-        reductionPct: 61,
-      },
-      {
-        docType: "주간 계획안",
-        baseline: "45분 00초",
-        actual: "14분 24초",
-        reductionPct: 68,
-      },
-    ],
-    perDocTime: "3분 20초",
-    taggingMatchRate: Math.round(
-      (state.observations.filter((o) => !o.manualTag).length /
-        Math.max(1, state.observations.length)) *
-        100,
-    ),
-    monthlyCost: "월 3,540원",
-    dailyConfirmed: [
-      { date: "07-03", count: 9 },
-      { date: "07-04", count: 12 },
-      { date: "07-07", count: 14 },
-      { date: "07-08", count: 11 },
-      { date: "07-09", count: 15 },
-      { date: "07-10", count: 13 },
-      { date: "07-11", count: 16 },
-      { date: "07-14", count: 12 },
-      { date: "07-15", count: 15 },
-      { date: "07-16", count: Math.min(15, 10 + confirmed.length) },
-    ],
-    byUser: MOCK_BY_USER.map((u) => ({
-      userId: u.user_id,
-      name: u.name,
-      confirmedCount: u.confirmed_count,
-      adoptionRate: Math.round(u.adoption_rate * 100),
-      editRateAvgPct: Math.round(u.edit_rate_avg * 100),
-      perDocTime: `${Math.floor(u.avg_minutes_per_doc)}분 ${String(
-        Math.round((u.avg_minutes_per_doc % 1) * 60),
-      ).padStart(2, "0")}초`,
-    })),
-    unattributedCount: MOCK_UNATTRIBUTED,
-  };
-}
 
 /**
  * (r9) 확정자별 지표 — 교사를 줄 세우는 값이 아니라 "AI 초안이 누구의 문체에

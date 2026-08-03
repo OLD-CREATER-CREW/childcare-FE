@@ -7,7 +7,15 @@ import { motion } from "framer-motion";
 import { Sprout } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useSignup } from "@/lib/queries";
-import { ApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api";
+import {
+  PASSWORD_ERROR,
+  PASSWORD_HINT,
+  PASSWORD_MIN_LENGTH,
+  USERNAME_ERROR,
+  USERNAME_HINT,
+  USERNAME_RE,
+} from "@/lib/constants";
 import { N, Notice, SpecBar, Toast } from "@/components/ui";
 
 /**
@@ -15,8 +23,6 @@ import { N, Notice, SpecBar, Toast } from "@/components/ui";
  * 계정 생성(EP-043)은 원장 전용이라, 이 화면이 없으면 새 어린이집은 시작할 방법이 없다.
  * 로그인하지 않고 볼 수 있는 유일한 화면이다(명세 EP-051).
  */
-
-const USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
 
 /** 오류 코드 → 붙일 입력칸 (명세 1.2.3 ⑥) */
 const ERROR_FIELD: Record<string, "centerName" | "username"> = {
@@ -52,11 +58,8 @@ export default function SignupPage() {
     const director = name.trim();
     if (director.length < 1 || director.length > 50)
       next.name = "원장님 성함을 입력해 주세요.";
-    if (!USERNAME_RE.test(username))
-      next.username =
-        "아이디는 영문 소문자·숫자와 . _ - 를 3~30자로 쓸 수 있습니다.";
-    if (password.length < 8)
-      next.password = "비밀번호는 8자 이상이어야 합니다.";
+    if (!USERNAME_RE.test(username)) next.username = USERNAME_ERROR;
+    if (password.length < PASSWORD_MIN_LENGTH) next.password = PASSWORD_ERROR;
     return next;
   };
 
@@ -166,15 +169,13 @@ export default function SignupPage() {
             <input
               id="username"
               className="input"
-              placeholder="영문 소문자·숫자 3~30자"
+              placeholder={USERNAME_HINT}
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
             {fieldError("username") ?? (
-              <p className="mt-1.5 text-[12px] text-muted">
-                영문 소문자·숫자 3~30자
-              </p>
+              <p className="mt-1.5 text-[12px] text-muted">{USERNAME_HINT}</p>
             )}
           </div>
 
@@ -193,7 +194,7 @@ export default function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
             />
             {fieldError("password") ?? (
-              <p className="mt-1.5 text-[12px] text-muted">8자 이상</p>
+              <p className="mt-1.5 text-[12px] text-muted">{PASSWORD_HINT}</p>
             )}
           </div>
 

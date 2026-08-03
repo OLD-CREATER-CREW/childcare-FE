@@ -36,7 +36,8 @@ export const queryKeys = {
   childRoster: (status: ChildStatus | "all") =>
     ["children", "roster", status] as const,
   childProfile: (childId: string) => ["children", "profile", childId] as const,
-  users: (activeOnly: boolean) => ["users", activeOnly] as const,
+  users: (activeOnly: boolean) => ["users", "list", activeOnly] as const,
+  user: (userId: string) => ["users", "detail", userId] as const,
 };
 
 // ---- Queries ----
@@ -136,8 +137,11 @@ export const useLogout = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: apiFn.logout,
-    // 다른 계정으로 다시 로그인해도 이전 세션의 서버 캐시가 남지 않도록 비운다
-    onSettled: () => qc.clear(),
+    // 다른 계정으로 다시 로그인해도 이전 세션의 서버 캐시가 남지 않도록 비운다.
+    // `clear()`가 아니라 `removeQueries()`인 이유: clear는 마운트된 관찰자를
+    // 즉시 재요청시키는데, 이 시점엔 토큰이 이미 없어 401 → 갱신 실패 → 세션
+    // 만료 핸들러까지 타면서 정상 로그아웃마다 실패 요청이 남는다.
+    onSettled: () => qc.removeQueries(),
   });
 };
 
@@ -161,6 +165,9 @@ export const useChildProfile = (childId: string | null) =>
     queryFn: () => apiFn.fetchChildProfile(childId as string),
     enabled: !!childId,
     staleTime: 0,
+    // 실패를 빨리 드러낸다 — 이 조회가 실패하면 인적사항 패널은 폼 대신 오류를
+    // 보여 줘야 하므로, 재시도로 그 판정을 늦추면 사용자가 그 사이 폼을 채운다.
+    retry: false,
   });
 
 /** 명단이 바뀌면 아이 목록에 기대는 화면(홈 현황·알림장 대기열)도 함께 무효화한다 */
@@ -227,6 +234,15 @@ export const useUsers = (activeOnly: boolean, enabled = true) =>
     retry: false,
   });
 
+/** EP-045 — 원장은 아무 계정이나, 교사는 자기 계정만(내 정보 조회) */
+export const useUser = (userId: string | null) =>
+  useQuery({
+    queryKey: queryKeys.user(userId ?? ""),
+    queryFn: () => apiFn.fetchUser(userId as string),
+    enabled: !!userId,
+    retry: false,
+  });
+
 const invalidateUsers = (qc: ReturnType<typeof useQueryClient>) =>
   qc.invalidateQueries({ queryKey: ["users"] });
 
@@ -245,7 +261,7 @@ export const useUpdateUser = () => {
       userId,
       patch,
     }: {
-      userId: number;
+      userId: string;
       patch: UserAccountPatch;
     }) => apiFn.updateUser(userId, patch),
     onSuccess: () => invalidateUsers(qc),
@@ -255,7 +271,7 @@ export const useUpdateUser = () => {
 export const useLockUser = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (userId: number) => apiFn.lockUser(userId),
+    mutationFn: (userId: string) => apiFn.lockUser(userId),
     onSuccess: () => invalidateUsers(qc),
   });
 };
@@ -267,7 +283,7 @@ export const useResetUserPassword = () => {
       userId,
       newPassword,
     }: {
-      userId: number;
+      userId: string;
       newPassword: string;
     }) => apiFn.resetUserPassword(userId, newPassword),
     onSuccess: () => invalidateUsers(qc),

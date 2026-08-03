@@ -11,6 +11,8 @@
  * NEXT_PUBLIC_USE_MOCK=true면 MSW 서비스워커가 가로챈다.
  */
 
+import type { SpecRefresh } from "@/lib/api/spec";
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 /** 명세 1.4 오류 응답 규약 — code는 분기용 영문 상수, message는 화면 표시용 한글 */
@@ -79,36 +81,53 @@ export const tokenStore = {
 // ---------- 401 자동 갱신 (명세 1.2.3 ④) ----------
 
 /** EP-050 응답 — 리프레시 토큰은 회전하지 않으므로 access만 온다 */
-type RefreshResponse = { access_token: string };
+/**
+ * 갱신 결과는 세 가지로 갈린다 — **이 구분이 없으면 와이파이 순단 한 번에
+ * 12시간짜리 리프레시 토큰이 지워진다.** 명세 EP-050은 `401`일 때만 저장한
+ * 토큰을 지우라고 규정한다.
+ *
+ * - `ok`         — 새 액세스 토큰을 받았다
+ * - `expired`    — 401. 되살릴 수 없으므로 토큰을 버리고 로그인 화면으로
+ * - `unavailable`— 네트워크 오류·5xx. 서버가 잠깐 없는 것이지 세션이 끝난 게 아니다
+ */
+export type RefreshOutcome = "ok" | "expired" | "unavailable";
 
 // 진행 중인 갱신을 공유한다: 화면 하나가 API를 3개 동시에 부르면 401도 3개가
 // 오는데, 그때마다 갱신하면 refresh가 3번 나간다.
-let refreshing: Promise<boolean> | null = null;
+let refreshing: Promise<RefreshOutcome> | null = null;
 
-/** 저장된 리프레시 토큰으로 액세스 토큰을 새로 받는다. 성공 여부를 돌려준다. */
-export function refreshAccessToken(): Promise<boolean> {
-  refreshing ??= (async () => {
+/** 저장된 리프레시 토큰으로 액세스 토큰을 새로 받는다(명세 EP-050). */
+export function refreshAccessToken(): Promise<RefreshOutcome> {
+  refreshing ??= (async (): Promise<RefreshOutcome> => {
     const refreshToken = tokenStore.refresh;
-    if (!refreshToken) return false;
+    // 애초에 토큰이 없으면 갱신할 것이 없다 — 만료와 같은 취급이다.
+    if (!refreshToken) return "expired";
     try {
       const res = await fetch(`${BASE_URL}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!res.ok) return false;
-      const body = (await res.json()) as RefreshResponse;
-      if (!body?.access_token) return false;
+      if (res.status === 401) return "expired";
+      if (!res.ok) return "unavailable";
+      const body = (await res.json()) as SpecRefresh;
+      if (!body?.access_token) return "unavailable";
       tokenStore.setAccess(body.access_token);
-      return true;
+      return "ok";
     } catch {
       // 네트워크 오류는 "세션 만료"가 아니다 — 토큰을 지우지 않는다.
-      return false;
+      return "unavailable";
     }
   })().finally(() => {
     refreshing = null;
   });
   return refreshing;
+}
+
+/** 갱신 실패로 세션이 끝났을 때의 뒷정리 — 토큰을 버리고 화면에 알린다 */
+function endSession() {
+  tokenStore.clear();
+  sessionExpiredHandler?.();
 }
 
 type RequestOptions = {
@@ -121,8 +140,13 @@ async function request<T>(
   init?: RequestInit,
   opts?: RequestOptions,
 ): Promise<T> {
-  const call = () =>
-    fetch(`${BASE_URL}/api${path}`, {
+  // 이 요청이 어느 토큰으로 나갔는지 기억해 둔다. 401을 받았을 때 그 사이에
+  // 다른 요청이 이미 갱신했다면 또 갱신할 이유가 없다(명세 1.2.3 ④ "갱신은 한 번만").
+  let sentWith: string | null = null;
+
+  const call = () => {
+    sentWith = accessToken;
+    return fetch(`${BASE_URL}/api${path}`, {
       // 쿠키를 쓰지 않으므로 credentials도 쓰지 않는다(명세 r11 1.2) — 그래서
       // 서버의 `Access-Control-Allow-Origin: *`가 그대로 동작한다.
       ...init,
@@ -134,22 +158,27 @@ async function request<T>(
           : {}),
       },
     });
+  };
 
   let res = await call();
 
   // 401이면 갱신을 한 번 시도하고 원래 요청을 **한 번만** 재시도한다.
   // 갱신 후에도 401이면 토큰 문제가 아니므로(계정 잠금 등) 로그인 화면으로 보낸다.
   if (res.status === 401 && !opts?.skipAuth) {
-    const renewed = await refreshAccessToken();
-    if (!renewed) {
-      tokenStore.clear();
-      sessionExpiredHandler?.();
-    } else {
+    if (accessToken && accessToken !== sentWith) {
+      // 내가 기다리는 동안 다른 요청이 갱신을 끝냈다 — 갱신 없이 재시도만 한다.
       res = await call();
-      if (res.status === 401) {
-        tokenStore.clear();
-        sessionExpiredHandler?.();
+      if (res.status === 401) endSession();
+    } else {
+      const outcome = await refreshAccessToken();
+      if (outcome === "expired") {
+        endSession();
+      } else if (outcome === "ok") {
+        res = await call();
+        if (res.status === 401) endSession();
       }
+      // "unavailable"이면 토큰을 남긴 채 원래 401을 그대로 던진다 —
+      // 서버가 잠깐 없는 것이지 세션이 끝난 게 아니다(재접속하면 이어서 쓴다).
     }
   }
 

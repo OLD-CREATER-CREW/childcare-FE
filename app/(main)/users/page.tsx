@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ShieldAlert, UserPlus } from "lucide-react";
-import { ApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api";
 import {
   useCreateUser,
   useLockUser,
@@ -11,6 +11,14 @@ import {
   useUsers,
 } from "@/lib/queries";
 import { useApp } from "@/lib/store";
+import {
+  PASSWORD_ERROR,
+  PASSWORD_HINT,
+  PASSWORD_MIN_LENGTH,
+  USERNAME_ERROR,
+  USERNAME_HINT,
+  USERNAME_RE,
+} from "@/lib/constants";
 import { ROLE_LABEL } from "@/lib/types";
 import type { UserAccount, UserRole } from "@/lib/types";
 import {
@@ -31,8 +39,6 @@ import {
  * 메뉴 자체를 교사에게 숨기지만, 주소로 직접 들어올 수 있으므로 화면에서도 막는다.
  * 서버의 403이 최후 방어선이다.
  */
-
-const USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
 
 const ROLE_OPTIONS = [
   { value: "teacher", label: ROLE_LABEL.teacher },
@@ -77,7 +83,9 @@ export default function UsersPage() {
       setName("");
       setRole("teacher");
     }
-    if (panel?.mode === "password") setPassword("");
+    // 패널이 닫힐 때도 반드시 비운다 — 성공 후 상태에 남은 평문 비밀번호는
+    // React DevTools·힙 스냅샷·오류 리포터의 상태 직렬화에 그대로 노출된다.
+    if (panel?.mode === "password" || panel === null) setPassword("");
     setError("");
   }, [panel]);
 
@@ -108,11 +116,11 @@ export default function UsersPage() {
   const createUser = () => {
     setError("");
     if (!USERNAME_RE.test(username)) {
-      setError("아이디는 영문 소문자·숫자·. _ - 로 3~30자입니다.");
+      setError(USERNAME_ERROR);
       return;
     }
-    if (password.length < 8) {
-      setError("비밀번호는 8자 이상으로 정해 주세요.");
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      setError(PASSWORD_ERROR);
       return;
     }
     if (!name.trim()) {
@@ -150,7 +158,7 @@ export default function UsersPage() {
     );
   };
 
-  const toggleActive = (user: UserAccount) => {
+  const unlockUser = (user: UserAccount) => {
     setError("");
     updateMutation.mutate(
       { userId: user.userId, patch: { active: true } },
@@ -182,8 +190,8 @@ export default function UsersPage() {
   const doResetPassword = () => {
     if (panel?.mode !== "password") return;
     setError("");
-    if (password.length < 8) {
-      setError("비밀번호는 8자 이상으로 정해 주세요.");
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      setError(PASSWORD_ERROR);
       return;
     }
     resetMutation.mutate(
@@ -199,6 +207,14 @@ export default function UsersPage() {
   };
 
   const users = usersQuery.data ?? [];
+
+  /** 이 사람을 강등·잠그면 기관에 활성 원장이 0명이 되는가(명세 1.2.2) */
+  const isLastActiveDirector = (u: UserAccount) =>
+    u.role === "director" &&
+    u.active &&
+    users.filter(
+      (o) => o.role === "director" && o.active && o.userId !== u.userId,
+    ).length === 0;
 
   return (
     <>
@@ -315,7 +331,7 @@ export default function UsersPage() {
             <input
               id="new-username"
               className="input"
-              placeholder="영문 소문자·숫자 3~30자"
+              placeholder={USERNAME_HINT}
               autoComplete="off"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -330,7 +346,7 @@ export default function UsersPage() {
               id="new-password"
               className="input"
               type="password"
-              placeholder="8자 이상"
+              placeholder={PASSWORD_HINT}
               autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -411,8 +427,20 @@ export default function UsersPage() {
                   ariaLabel="역할"
                   value={role}
                   onChange={(v) => setRole(v as UserRole)}
-                  options={ROLE_OPTIONS}
+                  // 마지막 남은 활성 원장은 교사로 내릴 수 없다(명세 1.2.2 409 LAST_DIRECTOR).
+                  // 후임을 먼저 원장으로 올리는 것이 인수인계의 정상 절차다.
+                  options={
+                    isLastActiveDirector(panel.user)
+                      ? ROLE_OPTIONS.filter((o) => o.value === "director")
+                      : ROLE_OPTIONS
+                  }
                 />
+                {isLastActiveDirector(panel.user) && (
+                  <p className="mt-1.5 text-[12px] text-muted">
+                    기관에 원장이 최소 한 명은 있어야 합니다. 다른 원장을 먼저
+                    지정해 주세요.
+                  </p>
+                )}
               </div>
               {error && (
                 <p
@@ -432,7 +460,11 @@ export default function UsersPage() {
                   <N n={6} />
                   비밀번호 재설정
                 </button>
-                {panel.user.active ? (
+                {/* 자기 계정 잠금은 명세 1.2.2가 막는 동작이다(409 SELF_LOCKOUT).
+                    버튼을 남겨 두면 확인 모달까지 진행한 뒤 실패하는 흐름이 되어,
+                    규약이 굳이 막아 둔 사고를 화면이 유도하게 된다. */}
+                {panel.user.userId === auth?.userId ? null : panel.user
+                    .active ? (
                   <button
                     className="btn danger"
                     onClick={() => setConfirmLock(panel.user)}
@@ -443,7 +475,7 @@ export default function UsersPage() {
                 ) : (
                   <button
                     className="btn"
-                    onClick={() => toggleActive(panel.user)}
+                    onClick={() => unlockUser(panel.user)}
                     disabled={updateMutation.isPending}
                   >
                     사용중으로 되돌리기
@@ -486,7 +518,7 @@ export default function UsersPage() {
                   id="reset-password"
                   className="input"
                   type="password"
-                  placeholder="8자 이상"
+                  placeholder={PASSWORD_HINT}
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

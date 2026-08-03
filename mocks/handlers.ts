@@ -10,7 +10,9 @@ import {
   intToChildId,
   intToConsultId,
   intToRecordId,
+  intToUserId,
   recordIdToInt,
+  userIdToInt,
   summaryFromSpec,
   summaryToSpec,
 } from "@/lib/api/spec";
@@ -58,8 +60,9 @@ function specChild(c: Child): SpecChild {
     name: c.name,
     birth: c.birthDate,
     class_name: profile?.className ?? db.CLASS_NAME,
-    // (r7) 실 서버는 male/female로 준다 — 목도 같은 값을 쓴다
-    gender: c.gender === "여" ? "female" : "male",
+    // (r7) 실 서버는 male/female/null 세 값을 준다 — 목도 null을 보존해야
+    // "미입력 아동" 경로가 목에서도 드러난다.
+    gender: c.gender === "여" ? "female" : c.gender === "남" ? "male" : null,
     status: profile?.status ?? "enrolled",
     guardian: c.guardian,
     allergy: c.allergy ?? null,
@@ -88,7 +91,7 @@ function specChildDetail(p: ChildProfile): SpecChildDetail {
 /** EP-043~048 — 계정. 비밀번호는 어떤 응답에도 실리지 않는다 */
 function specUserAccount(u: UserAccount): SpecUserAccount {
   return {
-    user_id: u.userId,
+    user_id: userIdToInt(u.userId),
     username: u.username,
     name: u.name,
     role: u.role,
@@ -174,13 +177,43 @@ function specRecord(rec: DailyRecord) {
 
 const MOCK_ACCESS_TOKEN = "mock.access.token";
 const MOCK_REFRESH_TOKEN = "mock.refresh.token";
-const MOCK_USER = {
-  user_id: 12,
-  name: db.TEACHER_NAME,
-  role: "teacher" as const,
-  center_id: 3,
-  center_name: db.CLASS_NAME,
-};
+
+/** 목 기관명 — 회원가입으로 새 기관을 만들면 그 이름으로 바뀐다 */
+let mockCenterName = db.CLASS_NAME;
+
+/** 지금 로그인한 사람을 명세 EP-001/003 응답 형태로 */
+function sessionUserPayload() {
+  const u = db.getSessionUser();
+  return {
+    user_id: userIdToInt(u.userId),
+    name: u.name,
+    role: u.role,
+    center_id: 3,
+    center_name: mockCenterName,
+  };
+}
+
+/**
+ * 개발용 401 강제 스위치 — 목은 토큰을 검증하지 않아 업무 API에서 401이 날 수
+ * 없고, 그러면 **401 자동 갱신 래퍼(명세 1.2.3 ④)를 한 번도 밟아 볼 수 없다.**
+ * 15분을 기다리는 대신 콘솔에서 아래처럼 켜서 갱신 경로를 손으로 확인한다.
+ *
+ *   localStorage.setItem("childcare.mock.force401", "1")   // 다음 업무 요청 1건이 401
+ *   localStorage.setItem("childcare.mock.force401", "all") // 갱신해도 계속 401(만료 세션)
+ */
+const FORCE_401_KEY = "childcare.mock.force401";
+
+function consumeForced401(): boolean {
+  if (typeof window === "undefined") return false;
+  const flag = localStorage.getItem(FORCE_401_KEY);
+  if (!flag) return false;
+  // "1"은 한 번만 — 갱신 후 재시도가 성공하는 정상 경로를 재현한다.
+  if (flag !== "all") localStorage.removeItem(FORCE_401_KEY);
+  return true;
+}
+
+const unauthorized = () =>
+  err(401, "UNAUTHORIZED", "로그인이 필요합니다. 다시 로그인해 주세요.");
 
 // ---------- 핸들러 ----------
 
@@ -207,12 +240,17 @@ export const handlers = [
         { status: 400 },
       );
     }
+    // 목은 비밀번호를 검증하지 않는다. 다만 **아이디에 `director`가 들어가면
+    // 원장으로 로그인**시켜, 목 모드에서도 원장 전용 화면(SCR-017)과 역할 분기를
+    // 실제로 눌러 볼 수 있게 한다 — 없으면 그 경로를 검증할 방법이 아예 없다.
+    const asDirector = body.username.includes("director");
+    db.setSessionUser(asDirector ? "u11" : "u12");
     return HttpResponse.json({
       access_token: MOCK_ACCESS_TOKEN,
       refresh_token: MOCK_REFRESH_TOKEN,
       token_type: "Bearer",
       expires_in: 900,
-      user: MOCK_USER,
+      user: sessionUserPayload(),
     });
   }),
 
@@ -221,17 +259,16 @@ export const handlers = [
     const body = (await request.json().catch(() => ({}))) as {
       center_name?: string;
     };
+    // 가입은 언제나 그 기관의 첫 원장을 만든다(명세 EP-051)
+    if (body.center_name) mockCenterName = body.center_name;
+    db.setSessionUser("u11");
     return HttpResponse.json(
       {
         access_token: MOCK_ACCESS_TOKEN,
         refresh_token: MOCK_REFRESH_TOKEN,
         token_type: "Bearer",
         expires_in: 900,
-        user: {
-          ...MOCK_USER,
-          role: "director",
-          center_name: body.center_name ?? MOCK_USER.center_name,
-        },
+        user: sessionUserPayload(),
       },
       { status: 201 },
     );
@@ -242,26 +279,22 @@ export const handlers = [
     const body = (await request.json().catch(() => ({}))) as {
       refresh_token?: string;
     };
-    if (body.refresh_token !== MOCK_REFRESH_TOKEN) {
-      return HttpResponse.json(
-        {
-          error: {
-            code: "UNAUTHORIZED",
-            message: "로그인이 필요합니다. 다시 로그인해 주세요.",
-          },
-        },
-        { status: 401 },
-      );
-    }
+    if (body.refresh_token !== MOCK_REFRESH_TOKEN) return unauthorized();
+    // force401="all"이면 갱신도 막아 "되살릴 수 없는 세션"을 재현한다.
+    if (
+      typeof window !== "undefined" &&
+      localStorage.getItem(FORCE_401_KEY) === "all"
+    )
+      return unauthorized();
     return HttpResponse.json({
       access_token: MOCK_ACCESS_TOKEN,
       token_type: "Bearer",
       expires_in: 900,
-      user: MOCK_USER,
+      user: sessionUserPayload(),
     });
   }),
 
-  http.get("/api/auth/me", async () => HttpResponse.json(MOCK_USER)),
+  http.get("/api/auth/me", async () => HttpResponse.json(sessionUserPayload())),
 
   http.post("/api/auth/logout", async () => HttpResponse.json({ ok: true })),
 
@@ -301,6 +334,8 @@ export const handlers = [
 
   // ===== 아동 목록 (EP-004) =====
   http.get("/api/children", async ({ request }) => {
+    // 갱신 래퍼를 밟아 볼 수 있는 유일한 지점 — 위 FORCE_401_KEY 설명 참고.
+    if (consumeForced401()) return unauthorized();
     await delay(200);
     const status =
       (new URL(request.url).searchParams.get("status") as
@@ -441,14 +476,14 @@ export const handlers = [
   }),
 
   http.get("/api/users/:userId", async ({ params }) => {
-    const user = db.getUser(Number(params.userId));
+    const user = db.getUser(intToUserId(Number(params.userId)));
     if (!user) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
     return HttpResponse.json(specUserAccount(user));
   }),
 
   http.patch("/api/users/:userId", async ({ params, request }) => {
     await delay(300);
-    const userId = Number(params.userId);
+    const userId = intToUserId(Number(params.userId));
     const user = db.getUser(userId);
     if (!user) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
     const patch = (await request.json().catch(() => ({}))) as {
@@ -457,7 +492,7 @@ export const handlers = [
       active?: boolean;
     };
     // 1.2.2 잠금 방지 — 자기 잠금은 막고, 자기 강등은 막지 않는다(인수인계)
-    if (patch.active === false && userId === MOCK_USER.user_id)
+    if (patch.active === false && userId === db.getSessionUser().userId)
       return err(
         409,
         "SELF_LOCKOUT",
@@ -476,10 +511,10 @@ export const handlers = [
 
   http.delete("/api/users/:userId", async ({ params }) => {
     await delay(300);
-    const userId = Number(params.userId);
+    const userId = intToUserId(Number(params.userId));
     const user = db.getUser(userId);
     if (!user) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    if (userId === MOCK_USER.user_id)
+    if (userId === db.getSessionUser().userId)
       return err(
         409,
         "SELF_LOCKOUT",
@@ -502,7 +537,7 @@ export const handlers = [
 
   http.post("/api/users/:userId/password", async ({ params, request }) => {
     await delay(360);
-    const user = db.getUser(Number(params.userId));
+    const user = db.getUser(intToUserId(Number(params.userId)));
     if (!user) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
     const body = (await request.json().catch(() => ({}))) as {
       new_password?: string;

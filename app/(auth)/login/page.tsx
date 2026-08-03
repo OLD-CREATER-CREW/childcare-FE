@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { Sprout } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useLogin } from "@/lib/queries";
-import { ApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api";
 import { N, Notice, SpecBar, Toast } from "@/components/ui";
 
 // SCR-001 로그인 — 셸 밖의 단독 화면. "실제 아동 정보 입력 금지" 상시 고지(REQ-NF-007)

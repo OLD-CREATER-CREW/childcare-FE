@@ -1,12 +1,14 @@
 "use client";
 
-import { CLASS_NAME, TODAY } from "@/lib/constants";
+import { TODAY } from "@/lib/constants";
+import { useApp } from "@/lib/store";
 import { useChildren, useRecordSummary } from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import { PageHead, Skeleton, SpecBar } from "@/components/ui";
 
 // SCR-006 보육일지 — 공식 문서 톤 · 발송 없이 확정으로 종료 (EP-015 없음)
 export default function JournalPage() {
+  const { auth } = useApp();
   const childrenQuery = useChildren();
   const summaryQuery = useRecordSummary();
 
@@ -18,7 +20,7 @@ export default function JournalPage() {
     <>
       <PageHead
         title="보육일지"
-        sub={`${CLASS_NAME} · ${TODAY} — 공식 문서 톤 · 발송 없이 확정으로 종료`}
+        sub={`${auth?.centerName ?? ""} ${TODAY} — 공식 문서 톤 · 발송 없이 확정으로 종료`.trim()}
       />
       <SpecBar
         scr="SCR-006"

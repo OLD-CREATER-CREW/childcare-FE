@@ -25,7 +25,7 @@ import {
   Users,
 } from "lucide-react";
 import { useApp } from "@/lib/store";
-import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
+import { TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
 import { ROLE_LABEL } from "@/lib/types";
 import { useLogout, useRecordSummary } from "@/lib/queries";
 import { PasswordChangeDialog } from "@/components/PasswordChangeDialog";
@@ -174,8 +174,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
           어린이집 AI 행정비서
         </div>
         <span className="top-date text-[13px] text-muted">
-          {/* 기관명은 로그인 응답의 center_name — 세션 전 잠깐만 상수로 채운다 */}
-          {TODAY_LABEL} · {auth?.centerName ?? CLASS_NAME}
+          {/* 기관명은 로그인 응답의 center_name. Shell은 AuthGate 안이라 auth는
+              사실상 항상 있고, 없을 때 반 이름(CLASS_NAME)을 기관명 자리에 넣으면
+              사실과 다른 값이 상단바에 뜬다 — 그럴 땐 구분자까지 감춘다. */}
+          {TODAY_LABEL}
+          {auth?.centerName ? ` · ${auth.centerName}` : ""}
         </span>
         <div className="flex-1" />
         {replay && <span className="replay-pill">▶ 재생 모드</span>}

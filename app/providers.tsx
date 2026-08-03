@@ -4,7 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { AppProvider } from "@/lib/store";
 
-const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
+/**
+ * 목 사용 여부는 **명시적으로 켤 때만** 켠다.
+ *
+ * `!== "false"`로 두면 변수가 없을 때 목이 켜지는데, `output: "export"`라
+ * `NEXT_PUBLIC_*`는 빌드 시점에 값이 박힌다. 즉 배포 빌드에서 이 변수를 깜빡하면
+ * 산출물이 목을 물고 나가고, 목 로그인은 아무 아이디·비밀번호나 통과시키므로
+ * 인증이 통째로 무력화된다(REQ-NF-011은 시연 첫날부터 토큰 인증을 요구한다).
+ * 기본값은 안전측(실 서버)이어야 한다.
+ */
+const USE_MOCK =
+  process.env.NEXT_PUBLIC_USE_MOCK === "true" &&
+  process.env.NEXT_PUBLIC_APP_ENV !== "production";
 
 // dev의 StrictMode는 effect를 두 번 실행하는데, worker.start()를 두 번 호출하면
 // MSW가 "cannot configure an already enabled network"로 던집니다.

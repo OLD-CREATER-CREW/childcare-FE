@@ -6,7 +6,8 @@ export type Child = {
   id: string;
   name: string;
   birthDate: string;
-  gender: "남" | "여";
+  /** null이면 미입력 — "남"으로 접지 않는다(EP-004가 세 값을 준다) */
+  gender: "남" | "여" | null;
   guardian: string;
   /** 알레르기 등 급식 유의사항 */
   allergy?: string;
@@ -207,7 +208,7 @@ export type MetricsSummary = {
   dailyConfirmed: { date: string; count: number }[];
   /** (r9) 확정자별 채택률·수정률 — 줄 세우기가 아니라 문체 적합도 단서다 */
   byUser: {
-    userId: number;
+    userId: string;
     name: string;
     confirmedCount: number;
     adoptionRate: number | null;
@@ -234,7 +235,8 @@ export type UserRole = "teacher" | "director";
 
 /** 명세 EP-001·003·050 응답의 `user` — 로그인한 사용자와 소속 기관 */
 export type AuthUser = {
-  userId: number;
+  /** seam이 번역한 표시용 ID(`u12`) — 명세 정수 ID는 seam 밖으로 나오지 않는다 */
+  userId: string;
   name: string;
   role: UserRole;
   centerId: number;
@@ -279,7 +281,7 @@ export type ChildProfileInput = {
 
 /** EP-043~048 계정. 비밀번호는 어떤 응답에도 실리지 않는다 */
 export type UserAccount = {
-  userId: number;
+  userId: string;
   username: string;
   name: string;
   role: UserRole;

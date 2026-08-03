@@ -81,6 +81,12 @@ export const childIdToInt = (id: string): number =>
   Number(id.replace(/\D/g, ""));
 export const intToChildId = (n: number): string => `c${n}`;
 
+// 계정도 같은 규율을 따른다 — 명세 정수 ID가 훅·화면까지 새면 백엔드가 user_id를
+// UUID로 바꿀 때 seam 한 줄이 아니라 타입·훅·화면 전부를 고쳐야 한다.
+export const userIdToInt = (id: string): number =>
+  Number(id.replace(/\D/g, ""));
+export const intToUserId = (n: number): string => `u${n}`;
+
 export const recordIdToInt = (id: string): number =>
   Number(id.replace(/\D/g, ""));
 export const intToRecordId = (n: number): string => `o${n}`;
@@ -161,10 +167,11 @@ export type SpecChildDetail = {
 export type SpecChild = {
   child_id: number;
   name: string;
-  birth: string;
+  /** 이름만 등록한 아동은 생년월일이 비어 온다(EP-039는 이름만 필수) */
+  birth: string | null;
   class_name: string;
-  /** (r7) 실 서버는 `male`·`female`·null, 목은 한글 표기를 그대로 쓴다 */
-  gender?: "male" | "female" | "남" | "여" | null;
+  /** (r7) `male` · `female` · null(미입력) */
+  gender?: "male" | "female" | null;
   /** (r7) `enrolled`(재원)·`withdrawn`(퇴소). 기본 쿼리가 enrolled라 목록엔 재원만 온다 */
   status?: "enrolled" | "withdrawn";
   // --- 목 부가(표현/현황) ---
