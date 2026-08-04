@@ -14,7 +14,6 @@ import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import {
   Avatar,
   N,
-  Notice,
   PageHead,
   Progress,
   Skeleton,
@@ -125,18 +124,6 @@ function NoticesContent() {
                 </button>
               ))}
             </div>
-            {queue.excluded.length > 0 && (
-              <div className="mt-3">
-                <Notice kind="warn">
-                  ⚠{" "}
-                  <span>
-                    {queue.excluded.join(" · ")} — 하루 기록 없음(생성 제외).
-                    성공분은 그대로 유지됩니다.{" "}
-                    <b>일괄 확정 버튼은 제공하지 않습니다(불변 원칙).</b>
-                  </span>
-                </Notice>
-              </div>
-            )}
           </>
         )}
       </div>

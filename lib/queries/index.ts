@@ -387,7 +387,7 @@ export const useSendDocument = () => {
 export const useUploadPhotos = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: apiFn.uploadPhotos,
+    mutationFn: (files: File[]) => apiFn.uploadPhotos(files),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.photos }),
   });
 };

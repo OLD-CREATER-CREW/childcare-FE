@@ -51,6 +51,10 @@ const NOW = () => new Date().toISOString();
 const err = (status: number, code: string, message: string) =>
   HttpResponse.json({ error: { code, message } }, { status });
 
+// EP-016 사진 상한 — 명세는 숫자를 못 박지 않고 `FILE_TOO_LARGE`만 규정한다.
+// 목은 실 서버가 어떤 값을 쓰든 화면이 413을 제대로 처리하는지 보려고 10MB를 쓴다.
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
 // ---------- 직렬화기 (내부 UI 모델 → 명세 와이어) ----------
 
 function specChild(c: Child): SpecChild {
@@ -818,9 +822,29 @@ export const handlers = [
   }),
 
   // ===== 사진 (EP-016~019) =====
-  http.post("/api/photos", async () => {
+  // 명세대로 multipart의 `files`를 받는다 — 실 서버와 계약이 어긋나면
+  // 목에서만 되는 업로드가 되어 버린다.
+  http.post("/api/photos", async ({ request }) => {
     await delay(350);
-    const added = db.uploadPhotos(3);
+    const form = await request.formData().catch(() => null);
+    const files = (form?.getAll("files") ?? []).filter(
+      (f): f is File => f instanceof File,
+    );
+    if (files.length === 0)
+      return err(400, "VALIDATION_ERROR", "올릴 사진을 선택해 주세요.");
+    if (files.some((f) => !f.type.startsWith("image/")))
+      return err(
+        415,
+        "UNSUPPORTED_FILE",
+        "지원하지 않는 파일 형식입니다. 사진 파일만 올릴 수 있어요.",
+      );
+    if (files.some((f) => f.size > MAX_PHOTO_BYTES))
+      return err(
+        413,
+        "FILE_TOO_LARGE",
+        "파일이 너무 큽니다. 용량을 확인해 주세요.",
+      );
+    const added = db.uploadPhotos(files.length);
     const items = db.getPhotoInbox().photos.slice(0, added).map(specPhoto);
     return HttpResponse.json({ items, total: added }, { status: 202 });
   }),

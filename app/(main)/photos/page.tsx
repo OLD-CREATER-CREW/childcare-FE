@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Camera, Loader2, Send, UserRoundPlus } from "lucide-react";
 import { useApp } from "@/lib/store";
+import { ApiError } from "@/lib/api/client";
 import {
   useAssignPhoto,
   useChildren,
@@ -42,6 +43,7 @@ export default function PhotosPage() {
   const [sel, setSel] = useState<number[]>([]);
   const [tab, setTab] = useState<string>("all");
   const [assignTarget, setAssignTarget] = useState<Photo | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const inbox = inboxQuery.data;
   const kids = useMemo(() => childrenQuery.data ?? [], [childrenQuery.data]);
@@ -74,11 +76,21 @@ export default function PhotosPage() {
     );
   };
 
-  const upload = () =>
-    uploadMutation.mutate(undefined, {
+  // EP-016은 multipart의 `files`가 필수다 — 파일을 고르지 않고 부르면 서버가
+  // VALIDATION_ERROR로 막으므로, 버튼은 파일 선택기를 여는 역할만 한다.
+  const upload = (files: File[]) => {
+    if (files.length === 0) return;
+    uploadMutation.mutate(files, {
       onSuccess: ({ added }) =>
         toast(`${added}장 업로드 — 배경에서 얼굴 분류를 시작합니다`),
+      onError: (e) =>
+        toast(
+          e instanceof ApiError
+            ? e.message
+            : "사진을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        ),
     });
+  };
 
   const sendSelected = () =>
     sendMutation.mutate(sel, {
@@ -121,13 +133,26 @@ export default function PhotosPage() {
       <div className="stack">
         <div className="card">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                upload(Array.from(e.target.files ?? []));
+                // 같은 파일을 다시 골라도 change가 뜨도록 값을 비운다
+                e.target.value = "";
+              }}
+            />
             <button
               className="btn primary big"
-              onClick={upload}
+              onClick={() => fileInputRef.current?.click()}
               disabled={uploadMutation.isPending}
             >
               <N n={1} />
-              <Camera size={16} /> 사진 올리기
+              <Camera size={16} />{" "}
+              {uploadMutation.isPending ? "업로드 중…" : "사진 올리기"}
             </button>
             <div className="min-w-[220px] flex-1">
               <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-bold">

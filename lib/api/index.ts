@@ -1,4 +1,9 @@
-import { ApiError, api, refreshAccessToken, tokenStore } from "@/lib/api/client";
+import {
+  ApiError,
+  api,
+  refreshAccessToken,
+  tokenStore,
+} from "@/lib/api/client";
 import type { ListEnvelope } from "@/lib/api/client";
 import {
   childIdToInt,
@@ -671,11 +676,19 @@ export const sendDocument = async (
 
 // ---------- 사진 (EP-016~019) ----------
 
-export const uploadPhotos = async (): Promise<{
+/**
+ * EP-016 — 사진 업로드·분류 트리거. 명세상 `multipart/form-data`의 `files`
+ * 필드(파일 여러 장)가 필수다. 본문 없이 부르면 서버가 VALIDATION_ERROR로 막는다.
+ */
+export const uploadPhotos = async (
+  files: File[],
+): Promise<{
   ok: boolean;
   added: number;
 }> => {
-  const res = await api.post<ListEnvelope<SpecPhoto>>("/photos");
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file, file.name));
+  const res = await api.postForm<ListEnvelope<SpecPhoto>>("/photos", form);
   return { ok: true, added: res.total };
 };
 

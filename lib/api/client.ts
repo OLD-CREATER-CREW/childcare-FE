@@ -144,6 +144,10 @@ async function request<T>(
   // 다른 요청이 이미 갱신했다면 또 갱신할 이유가 없다(명세 1.2.3 ④ "갱신은 한 번만").
   let sentWith: string | null = null;
 
+  // multipart 요청(EP-016 사진·EP-007 음성 등)은 Content-Type을 직접 넣으면
+  // 안 된다 — boundary는 fetch가 FormData를 보고 만들어 붙인다.
+  const isMultipart = init?.body instanceof FormData;
+
   const call = () => {
     sentWith = accessToken;
     return fetch(`${BASE_URL}/api${path}`, {
@@ -151,7 +155,7 @@ async function request<T>(
       // 서버의 `Access-Control-Allow-Origin: *`가 그대로 동작한다.
       ...init,
       headers: {
-        "Content-Type": "application/json",
+        ...(isMultipart ? {} : { "Content-Type": "application/json" }),
         ...init?.headers,
         ...(!opts?.skipAuth && accessToken
           ? { Authorization: `Bearer ${accessToken}` }
@@ -215,6 +219,9 @@ export const api = {
       },
       opts,
     ),
+  /** 파일 업로드 — 명세 6.1 "파일 업로드는 multipart/form-data" (EP-016 등) */
+  postForm: <T>(path: string, form: FormData, opts?: RequestOptions) =>
+    request<T>(path, { method: "POST", body: form }, opts),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>(
       path,
