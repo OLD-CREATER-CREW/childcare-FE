@@ -161,8 +161,11 @@ function serveOutDir(outDir) {
 
 async function createWindow() {
   const win = new BrowserWindow({
-    width: 1360,
-    height: 860,
+    width: 1420,
+    height: 832,
+    // 위 크기를 타이틀바 포함 창 크기가 아니라 **웹 화면(콘텐츠) 크기**로 잡는다 —
+    // 화면 설계 기준 해상도(1420×832)가 그대로 렌더링 영역이 되도록.
+    useContentSize: true,
     minWidth: 900,
     minHeight: 600,
     title: "어린이집 AI 행정비서",

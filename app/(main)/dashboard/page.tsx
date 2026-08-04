@@ -257,9 +257,65 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* (r9) 확정자별 지표 — 문서는 확정한 사람에게 귀속된다(EP-028 by_user) */}
+        <div className="card">
+          <h2>
+            <N n={7} />
+            확정자별 지표
+            <span className="hint">
+              줄 세우기가 아니라, AI 초안이 어떤 분의 문체·업무 방식에 잘 맞는지
+              보는 값입니다
+            </span>
+          </h2>
+          {!m ? (
+            <Skeleton lines={3} />
+          ) : m.byUser.length === 0 ? (
+            <div className="py-2 text-[13px] text-muted">
+              확정자가 기록된 문서가 아직 없습니다.
+            </div>
+          ) : (
+            <table className="tbl rowhover">
+              <thead>
+                <tr>
+                  <th>확정자</th>
+                  <th className="w-24">확정 문서</th>
+                  <th className="w-24">채택률</th>
+                  <th className="w-24">평균 수정률</th>
+                  <th className="w-28">문서당 시간</th>
+                </tr>
+              </thead>
+              <tbody>
+                {m.byUser.map((u) => (
+                  <tr key={u.userId}>
+                    <td className="font-semibold">{u.name}</td>
+                    <td>{u.confirmedCount}건</td>
+                    <td className="font-extrabold text-green-deep">
+                      {u.adoptionRate == null ? "—" : `${u.adoptionRate}%`}
+                    </td>
+                    <td>
+                      {u.editRateAvgPct == null ? "—" : `${u.editRateAvgPct}%`}
+                    </td>
+                    <td>{u.perDocTime}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {m && m.unattributedCount > 0 && (
+            <div className="mt-3">
+              <Notice kind="soft">
+                확정자가 기록되지 않은 문서 {m.unattributedCount}건은 위
+                집계에서 빠져 있습니다(시드 데이터와 귀속 기능 도입 이전 문서).
+                확정자별 문서 수의 합에 이 수를 더하면 전체 확정 문서 수가
+                됩니다.
+              </Notice>
+            </div>
+          )}
+        </div>
+
         <Notice kind="soft">
           <span>
-            <N n={7} />
+            <N n={8} />
             집계 제외 — 재생 모드(FN-017)·시드 데이터 산출물은 지표에 포함되지
             않습니다.
           </span>

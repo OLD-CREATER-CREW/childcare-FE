@@ -2,6 +2,8 @@ import type {
   AppSettings,
   ChecklistData,
   Child,
+  ChildProfile,
+  ChildProfileInput,
   ConsultData,
   ConsultSession,
   DailyRecord,
@@ -10,13 +12,15 @@ import type {
   DocStatus,
   DocType,
   DocumentDraft,
-  MetricsSummary,
   NoticeQueue,
   ObservationData,
   ObservationEntry,
   Photo,
   PhotoInbox,
   RecordSummary,
+  UserAccount,
+  UserAccountInput,
+  UserAccountPatch,
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
 import { applyTemplate } from "@/lib/templates";
@@ -229,6 +233,15 @@ type DbState = {
    */
   docIdByKey: Map<string, number>;
   docSeq: number;
+  /**
+   * (r7) 아동 인적사항 — 목록(children)에 없는 입소일·특이사항·퇴소일을 담는다.
+   * 명세도 목록(EP-004)과 상세(EP-040)를 갈라 두었으므로 같은 구조로 흉내 낸다.
+   */
+  profiles: Map<string, ChildProfile>;
+  childSeq: number;
+  /** (r8) 계정 — 기관 하나(center_id=3)만 다룬다 */
+  users: UserAccount[];
+  userSeq: number;
 };
 
 function recordKey(childId: string, date: string) {
@@ -572,12 +585,66 @@ function seedDocuments() {
   });
 }
 
+/** 시드 아동의 인적사항 — 입소일은 파일럿 학기 시작일로 둔다 */
+const ENROLLED_AT = "2026-03-02";
+
+function seedProfiles(children: Child[]): Map<string, ChildProfile> {
+  return new Map(
+    children.map((c) => [
+      c.id,
+      {
+        id: c.id,
+        name: c.name,
+        birthDate: c.birthDate,
+        className: CLASS_NAME,
+        gender: c.gender,
+        status: "enrolled" as const,
+        enrolledAt: ENROLLED_AT,
+        withdrawnAt: null,
+        memo: c.allergy ?? "",
+      },
+    ]),
+  );
+}
+
+/** 서버가 기동 시 심는 데모 계정과 같은 구성(명세 1.2 — demo_director·demo_teacher) */
+function seedUsers(): UserAccount[] {
+  return [
+    {
+      userId: "u11",
+      username: "demo_director",
+      name: "데모 원장",
+      role: "director",
+      active: true,
+    },
+    {
+      userId: "u12",
+      username: "demo_teacher",
+      name: TEACHER_NAME,
+      role: "teacher",
+      active: true,
+    },
+    {
+      userId: "u15",
+      username: "lee_boyuk",
+      name: "이보육 선생님",
+      role: "teacher",
+      active: false,
+    },
+  ];
+}
+
 function createState(): DbState {
+  const children = CHILD_SEEDS.map((c, i) => ({
+    ...c,
+    color: AVATAR_COLORS[i % AVATAR_COLORS.length],
+  }));
   return {
-    children: CHILD_SEEDS.map((c, i) => ({
-      ...c,
-      color: AVATAR_COLORS[i % AVATAR_COLORS.length],
-    })),
+    children,
+    profiles: seedProfiles(children),
+    childSeq: 200,
+    users: seedUsers(),
+    userSeq: 20,
     records: seedRecords(),
     documents: new Map(),
     photos: seedPhotos(),
@@ -627,6 +694,149 @@ export function getChildren(): Child[] {
 
 export function getChild(id: string): Child | undefined {
   return state.children.find((c) => c.id === id);
+}
+
+// ---------- 아동 인적사항 (FN-021 / EP-039~042) ----------
+
+/** 명세 EP-004: 기본은 재원만, `all`이면 퇴소 아동까지 */
+export function getRoster(status: "enrolled" | "withdrawn" | "all"): Child[] {
+  return state.children.filter((c) => {
+    const st = state.profiles.get(c.id)?.status ?? "enrolled";
+    return status === "all" ? true : st === status;
+  });
+}
+
+export function getChildProfile(id: string): ChildProfile | undefined {
+  return state.profiles.get(id);
+}
+
+/** 중복 검사는 **재원 아동만** 본다 — 퇴소한 아동과 같은 이름은 다시 등록할 수 있다 */
+export function hasEnrolledName(name: string, exceptId?: string): boolean {
+  return Array.from(state.profiles.values()).some(
+    (p) => p.id !== exceptId && p.status === "enrolled" && p.name === name,
+  );
+}
+
+export function createChildProfile(input: ChildProfileInput): ChildProfile {
+  const id = `c${++state.childSeq}`;
+  const profile: ChildProfile = {
+    id,
+    name: input.name.trim(),
+    birthDate: input.birthDate ?? "",
+    className: input.className ?? CLASS_NAME,
+    gender: input.gender ?? null,
+    status: "enrolled",
+    // 입소일을 비웠으면 오늘로 채운다(명세 EP-039)
+    enrolledAt: input.enrolledAt || TODAY,
+    withdrawnAt: null,
+    memo: input.memo ?? "",
+  };
+  state.profiles.set(id, profile);
+  state.children.push({
+    id,
+    name: profile.name,
+    birthDate: profile.birthDate,
+    gender: profile.gender ?? "남",
+    guardian: "",
+    allergy: profile.memo || undefined,
+    color: AVATAR_COLORS[state.children.length % AVATAR_COLORS.length],
+    recorded: false,
+    attending: true,
+  });
+  return profile;
+}
+
+/** 부분 수정 — undefined는 "그대로 두기", null은 "비우기"(명세 EP-041) */
+export function updateChildProfile(
+  id: string,
+  patch: Partial<ChildProfile>,
+): ChildProfile | undefined {
+  const prev = state.profiles.get(id);
+  if (!prev) return undefined;
+  const next: ChildProfile = { ...prev, ...patch };
+  // 퇴소를 되돌리면 퇴소일도 함께 지운다(오조작 복구 경로)
+  if (patch.status === "enrolled") next.withdrawnAt = null;
+  state.profiles.set(id, next);
+  const child = getChild(id);
+  if (child) {
+    child.name = next.name;
+    child.birthDate = next.birthDate;
+    child.gender = next.gender ?? child.gender;
+    child.allergy = next.memo || undefined;
+  }
+  return next;
+}
+
+/** 소프트 삭제 — 행을 지우지 않고 status만 바꾼다(명세 EP-042) */
+export function withdrawChildProfile(id: string): ChildProfile | undefined {
+  return updateChildProfile(id, { status: "withdrawn", withdrawnAt: TODAY });
+}
+
+// ---------- 계정 (FN-022 / EP-043~048) ----------
+
+/**
+ * 목 세션 — 지금 로그인한 사람이 누구인지. 자기 잠금 판정(SELF_LOCKOUT)과 역할
+ * 분기가 이 값에 걸린다. 실 서버는 토큰에서 읽지만 목은 토큰을 검증하지 않으므로
+ * 로그인할 때 여기에 적어 둔다.
+ */
+let sessionUserId = "u12";
+
+export function getSessionUser(): UserAccount {
+  return getUser(sessionUserId) ?? state.users[0];
+}
+
+export function setSessionUser(userId: string) {
+  sessionUserId = userId;
+}
+
+export function getUsers(activeOnly: boolean): UserAccount[] {
+  return activeOnly ? state.users.filter((u) => u.active) : state.users;
+}
+
+export function getUser(userId: string): UserAccount | undefined {
+  return state.users.find((u) => u.userId === userId);
+}
+
+export function hasUsername(username: string): boolean {
+  return state.users.some((u) => u.username === username);
+}
+
+export function createUserAccount(input: UserAccountInput): UserAccount {
+  const user: UserAccount = {
+    userId: `u${++state.userSeq}`,
+    username: input.username,
+    name: input.name,
+    role: input.role,
+    active: true,
+  };
+  state.users.push(user);
+  return user;
+}
+
+export function updateUserAccount(
+  userId: string,
+  patch: UserAccountPatch,
+): UserAccount | undefined {
+  const user = getUser(userId);
+  if (!user) return undefined;
+  Object.assign(user, patch);
+  return user;
+}
+
+/** 마지막 활성 원장 보호(명세 1.2.2) — 강등·잠금이 원장 0명을 만들면 막는다 */
+export function wouldRemoveLastDirector(
+  userId: string,
+  patch: UserAccountPatch,
+): boolean {
+  const target = getUser(userId);
+  if (!target || target.role !== "director" || !target.active) return false;
+  const losesDirector = patch.role === "teacher" || patch.active === false;
+  if (!losesDirector) return false;
+  return (
+    state.users.filter(
+      (u) => u.role === "director" && u.active && u.userId !== userId,
+    ).length === 0
+  );
 }
 
 export function getRecord(childId: string, date: string): DailyRecord | null {
@@ -1017,68 +1227,33 @@ export function getChecklist(): ChecklistData {
 
 // ---------- 지표 ----------
 
-export function getMetrics(): MetricsSummary {
-  const confirmed = Array.from(state.documents.values()).filter(
-    (d) => d.status !== "draft" && d.editDistance !== null,
-  );
-  const seededDone = 34; // 파일럿 기간 누적(시드) — 이번 세션 확정분을 더해 집계
-  const zeroEdits =
-    21 + confirmed.filter((d) => (d.editDistance ?? 100) === 0).length;
-  const minorEdits =
-    7 +
-    confirmed.filter((d) => {
-      const e = d.editDistance ?? 100;
-      return e > 0 && e <= 10;
-    }).length;
-  const totalDocs = seededDone + confirmed.length;
-  const adoptionRate = Math.round((zeroEdits / totalDocs) * 100);
-  const combinedRate = Math.round(((zeroEdits + minorEdits) / totalDocs) * 100);
-  return {
-    adoptionRate,
-    minorEditGainPt: combinedRate - adoptionRate,
-    combinedRate,
-    editDistribution: [zeroEdits, minorEdits, 4, 3, 2, 1],
-    timeSavings: [
-      {
-        docType: "알림장",
-        baseline: "7분 05초",
-        actual: "3분 20초",
-        reductionPct: 53,
-      },
-      {
-        docType: "보육일지",
-        baseline: "18분 00초",
-        actual: "7분 01초",
-        reductionPct: 61,
-      },
-      {
-        docType: "주간 계획안",
-        baseline: "45분 00초",
-        actual: "14분 24초",
-        reductionPct: 68,
-      },
-    ],
-    perDocTime: "3분 20초",
-    taggingMatchRate: Math.round(
-      (state.observations.filter((o) => !o.manualTag).length /
-        Math.max(1, state.observations.length)) *
-        100,
-    ),
-    monthlyCost: "월 3,540원",
-    dailyConfirmed: [
-      { date: "07-03", count: 9 },
-      { date: "07-04", count: 12 },
-      { date: "07-07", count: 14 },
-      { date: "07-08", count: 11 },
-      { date: "07-09", count: 15 },
-      { date: "07-10", count: 13 },
-      { date: "07-11", count: 16 },
-      { date: "07-14", count: 12 },
-      { date: "07-15", count: 15 },
-      { date: "07-16", count: Math.min(15, 10 + confirmed.length) },
-    ],
-  };
-}
+/**
+ * (r9) 확정자별 지표 — 교사를 줄 세우는 값이 아니라 "AI 초안이 누구의 문체에
+ * 잘 맞는지"를 보는 값이다(명세 EP-028). 목은 고정 표본으로 화면만 채운다.
+ */
+export const MOCK_BY_USER = [
+  {
+    user_id: 12,
+    name: TEACHER_NAME,
+    confirmed_count: 24,
+    adopted_count: 16,
+    adoption_rate: 0.667,
+    edit_rate_avg: 0.061,
+    avg_minutes_per_doc: 3.8,
+  },
+  {
+    user_id: 15,
+    name: "이보육 선생님",
+    confirmed_count: 18,
+    adopted_count: 9,
+    adoption_rate: 0.5,
+    edit_rate_avg: 0.112,
+    avg_minutes_per_doc: 4.9,
+  },
+];
+
+/** by_user 분모에서 빠진 문서 수(시드·r9 이전 확정분) */
+export const MOCK_UNATTRIBUTED = 6;
 
 /** 명세 EP-028 단위(0~1 비율·분·원)로 지표를 낸다. 화면 포맷은 seam이 맡는다. */
 export function getMetricsSpec() {
@@ -1131,6 +1306,8 @@ export function getMetricsSpec() {
       { date: "07-15", count: 15 },
       { date: "07-16", count: Math.min(15, 10 + confirmed.length) },
     ],
+    by_user: MOCK_BY_USER,
+    unattributed_count: MOCK_UNATTRIBUTED,
   };
 }
 

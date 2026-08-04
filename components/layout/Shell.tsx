@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  Baby,
   BarChart3,
   Bell,
   BookOpen,
@@ -12,6 +13,7 @@ import {
   CheckSquare,
   Home,
   KeyRound,
+  LogOut,
   Mail,
   Menu,
   Mic,
@@ -20,10 +22,13 @@ import {
   Settings,
   Sprout,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import { useApp } from "@/lib/store";
-import { CLASS_NAME, TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
-import { useRecordSummary } from "@/lib/queries";
+import { TEACHER_NAME, TODAY_LABEL } from "@/lib/constants";
+import { ROLE_LABEL } from "@/lib/types";
+import { useLogout, useRecordSummary } from "@/lib/queries";
+import { PasswordChangeDialog } from "@/components/PasswordChangeDialog";
 import { Toast } from "@/components/ui";
 
 type NavItem = {
@@ -32,6 +37,8 @@ type NavItem = {
   label: string;
   scr: string;
   badge?: (pendingDocs: number, unclassified: number) => number;
+  /** 원장 계정에만 보이는 메뉴(명세 1.2.1) */
+  directorOnly?: boolean;
 };
 
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -94,6 +101,20 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { href: "/settings", icon: Settings, label: "설정", scr: "014" },
     ],
   },
+  {
+    group: "원 관리",
+    items: [
+      { href: "/children", icon: Baby, label: "아동 관리", scr: "016" },
+      // 계정 관리는 원장 계정에만 메뉴가 보인다(스토리보드 SCR-017)
+      {
+        href: "/users",
+        icon: Users,
+        label: "계정 관리",
+        scr: "017",
+        directorOnly: true,
+      },
+    ],
+  },
 ];
 
 const BOTTOM_TABS = [
@@ -106,9 +127,26 @@ const BOTTOM_TABS = [
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
-  const { replay, annot, setAnnot } = useApp();
+  const { replay, annot, setAnnot, auth, signOut } = useApp();
+  const logoutMutation = useLogout();
   const [open, setOpen] = useState(false);
   const summaryQuery = useRecordSummary();
+
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const teacherName = auth?.name ?? TEACHER_NAME;
+  const teacherRole = auth ? ROLE_LABEL[auth.role] : "담임";
+  const isDirector = auth?.role === "director";
+
+  // 로그아웃(EP-002) — 서버는 리프레시 토큰만 폐기한다. 저장한 토큰 두 개를 지우는
+  // 것은 API 계층이 맡고, 여기서는 화면 상태를 비우고 로그인 화면으로 돌려보낸다.
+  // 서버 응답 실패와 무관하게 닫히는 루프여야 한다.
+  const doLogout = () =>
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        signOut();
+        router.replace("/login");
+      },
+    });
 
   const pendingDocs = summaryQuery.data?.pendingDocs ?? 0;
   const unclassified = summaryQuery.data?.unclassifiedPhotos ?? 0;
@@ -136,7 +174,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
           어린이집 AI 행정비서
         </div>
         <span className="top-date text-[13px] text-muted">
-          {TODAY_LABEL} · {CLASS_NAME}
+          {/* 기관명은 로그인 응답의 center_name. Shell은 AuthGate 안이라 auth는
+              사실상 항상 있고, 없을 때 반 이름(CLASS_NAME)을 기관명 자리에 넣으면
+              사실과 다른 값이 상단바에 뜬다 — 그럴 땐 구분자까지 감춘다. */}
+          {TODAY_LABEL}
+          {auth?.centerName ? ` · ${auth.centerName}` : ""}
         </span>
         <div className="flex-1" />
         {replay && <span className="replay-pill">▶ 재생 모드</span>}
@@ -159,9 +201,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             style={{ background: "var(--green)" }}
             aria-hidden
           >
-            {TEACHER_NAME.slice(0, 1)}
+            {teacherName.slice(0, 1)}
           </span>
-          <span className="name">{TEACHER_NAME} · 담임</span>
+          <span className="name">
+            {teacherName} · {teacherRole}
+          </span>
         </div>
       </header>
 
@@ -169,35 +213,57 @@ export function Shell({ children }: { children: React.ReactNode }) {
         {NAV.map((g) => (
           <div key={g.group}>
             <div className="nav-group">{g.group}</div>
-            {g.items.map((it) => {
-              const Icon = it.icon;
-              const cnt = it.badge?.(pendingDocs, unclassified) ?? 0;
-              return (
-                <Link
-                  key={it.href}
-                  href={it.href}
-                  className={`nav-item ${path === it.href ? "active" : ""}`}
-                >
-                  <Icon size={17} className="ico w-5 flex-none" />
-                  {it.label}
-                  {cnt > 0 ? <span className="cnt">{cnt}</span> : null}
-                  <span className="nav-scr">{it.scr}</span>
-                </Link>
-              );
-            })}
+            {g.items
+              .filter((it) => !it.directorOnly || isDirector)
+              .map((it) => {
+                const Icon = it.icon;
+                const cnt = it.badge?.(pendingDocs, unclassified) ?? 0;
+                return (
+                  <Link
+                    key={it.href}
+                    href={it.href}
+                    className={`nav-item ${path === it.href ? "active" : ""}`}
+                  >
+                    <Icon size={17} className="ico w-5 flex-none" />
+                    {it.label}
+                    {cnt > 0 ? <span className="cnt">{cnt}</span> : null}
+                    <span className="nav-scr">{it.scr}</span>
+                  </Link>
+                );
+              })}
           </div>
         ))}
         <div className="mt-auto">
-          <div className="nav-group">진입</div>
-          <Link href="/login" className="nav-item">
-            <KeyRound size={17} className="ico w-5 flex-none" /> 로그인
+          <div className="nav-group">계정</div>
+          {/* EP-049 — 교사·원장 모두 쓴다(명세 1.2.1) */}
+          <button
+            type="button"
+            className="nav-item w-full text-left"
+            onClick={() => setPasswordOpen(true)}
+          >
+            <KeyRound size={17} className="ico w-5 flex-none" />
+            비밀번호 변경
+            <span className="nav-scr">049</span>
+          </button>
+          <button
+            type="button"
+            className="nav-item w-full text-left"
+            onClick={doLogout}
+            disabled={logoutMutation.isPending}
+          >
+            <LogOut size={17} className="ico w-5 flex-none" />
+            {logoutMutation.isPending ? "로그아웃 중…" : "로그아웃"}
             <span className="nav-scr">001</span>
-          </Link>
+          </button>
         </div>
       </nav>
 
       <main className="main">{children}</main>
 
+      <PasswordChangeDialog
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+      />
       <Toast />
 
       <nav className="bottomtab">

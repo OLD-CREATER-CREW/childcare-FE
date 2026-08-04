@@ -10,7 +10,8 @@ import {
   Pencil,
   Sparkles,
 } from "lucide-react";
-import { CLASS_NAME, TEACHER_NAME, TODAY, TODAY_LABEL } from "@/lib/constants";
+import { TODAY, TODAY_LABEL } from "@/lib/constants";
+import { useApp } from "@/lib/store";
 import {
   useChildren,
   useDayRecordedIds,
@@ -30,6 +31,7 @@ import {
 // SCR-002 오늘 홈 — 허브
 export default function HomePage() {
   const router = useRouter();
+  const { auth } = useApp();
   const childrenQuery = useChildren();
   const summaryQuery = useRecordSummary();
   const queueQuery = useNoticeQueue();
@@ -43,12 +45,15 @@ export default function HomePage() {
   const isRecorded = (id: string) => recordedIds.has(id);
   const remaining = kids.filter((c) => !isRecorded(c.id));
 
+  const subtitle = [TODAY_LABEL, auth?.centerName, auth?.name]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <>
-      <PageHead
-        title="오늘 홈"
-        sub={`${TODAY_LABEL} · ${CLASS_NAME} · 담임 ${TEACHER_NAME}`}
-      />
+      {/* 이름·기관은 로그인 세션에서 온다 — 상수로 두면 원장으로 로그인했을 때
+          상단바("김원장 · 원장")와 본문("담임 김하늘 선생님")이 어긋난다. */}
+      <PageHead title="오늘 홈" sub={subtitle} />
       <SpecBar
         scr="SCR-002"
         fn={["허브(전 기능 연결)"]}

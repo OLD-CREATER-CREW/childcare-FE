@@ -81,6 +81,12 @@ export const childIdToInt = (id: string): number =>
   Number(id.replace(/\D/g, ""));
 export const intToChildId = (n: number): string => `c${n}`;
 
+// 계정도 같은 규율을 따른다 — 명세 정수 ID가 훅·화면까지 새면 백엔드가 user_id를
+// UUID로 바꿀 때 seam 한 줄이 아니라 타입·훅·화면 전부를 고쳐야 한다.
+export const userIdToInt = (id: string): number =>
+  Number(id.replace(/\D/g, ""));
+export const intToUserId = (n: number): string => `u${n}`;
+
 export const recordIdToInt = (id: string): number =>
   Number(id.replace(/\D/g, ""));
 export const intToRecordId = (n: number): string => `o${n}`;
@@ -93,7 +99,7 @@ export const intToConsultId = (n: number): string => `cs${n}`;
 
 export type SpecList<T> = { items: T[]; total: number };
 
-/** EP-001 / EP-003 */
+/** EP-003 응답 · EP-001/050/051 응답의 `user` */
 export type SpecUser = {
   user_id: number;
   name: string;
@@ -102,14 +108,73 @@ export type SpecUser = {
   center_name: string;
 };
 
+/** EP-001 로그인 / EP-051 회원가입 성공 응답 (명세 r11 — 토큰이 본문으로 온다) */
+export type SpecAuthTokens = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  user: SpecUser;
+};
+
+/** EP-050 갱신 응답 — 리프레시 토큰은 회전하지 않으므로 access만 온다 */
+export type SpecRefresh = {
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  user?: SpecUser;
+};
+
+/** EP-043~048 계정. 비밀번호는 어떤 응답에도 실리지 않는다 */
+export type SpecUserAccount = {
+  user_id: number;
+  username: string;
+  name: string;
+  role: "teacher" | "director";
+  active: boolean;
+  center_id: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+/** EP-049 본인 비밀번호 변경 응답 */
+export type SpecPasswordChange = {
+  ok: boolean;
+  revoked_sessions: number;
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  /** keep_refresh_token이 유효했으면 null — 갖고 있던 것을 계속 쓴다 */
+  refresh_token: string | null;
+};
+
+/** EP-039·040·041·042 — 아동 인적사항 전체(목록 EP-004보다 넓다) */
+export type SpecChildDetail = {
+  child_id: number;
+  name: string;
+  birth: string | null;
+  class_name: string | null;
+  gender: "male" | "female" | null;
+  status: "enrolled" | "withdrawn";
+  enrolled_at: string | null;
+  withdrawn_at: string | null;
+  memo: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 /** EP-004 (+ 목 부가 필드: 명세 응답의 상위집합, 실 백엔드는 무시 가능) */
 export type SpecChild = {
   child_id: number;
   name: string;
-  birth: string;
+  /** 이름만 등록한 아동은 생년월일이 비어 온다(EP-039는 이름만 필수) */
+  birth: string | null;
   class_name: string;
+  /** (r7) `male` · `female` · null(미입력) */
+  gender?: "male" | "female" | null;
+  /** (r7) `enrolled`(재원)·`withdrawn`(퇴소). 기본 쿼리가 enrolled라 목록엔 재원만 온다 */
+  status?: "enrolled" | "withdrawn";
   // --- 목 부가(표현/현황) ---
-  gender?: "남" | "여";
   guardian?: string;
   allergy?: string | null;
   recorded?: boolean;
@@ -251,6 +316,20 @@ export type SpecMetrics = {
     krw?: number | null;
     source: string;
   } | null;
+  /** (r9) 확정자별 채택률·수정률. 귀속 가능한 문서가 없으면 null */
+  by_user?:
+    | {
+        user_id: number;
+        name: string;
+        confirmed_count: number;
+        adopted_count: number;
+        adoption_rate: number | null;
+        edit_rate_avg: number | null;
+        avg_minutes_per_doc: number | null;
+      }[]
+    | null;
+  /** (r9) confirmed_by가 비어 by_user 분모에서 빠진 문서 수 */
+  unattributed_count?: number;
   // --- 목 부가(최근 확정 추이) ---
   daily_confirmed?: { date: string; count: number }[];
 };

@@ -1,4 +1,9 @@
-import { ApiError, api } from "@/lib/api/client";
+import {
+  ApiError,
+  api,
+  refreshAccessToken,
+  tokenStore,
+} from "@/lib/api/client";
 import type { ListEnvelope } from "@/lib/api/client";
 import {
   childIdToInt,
@@ -12,11 +17,14 @@ import {
   intToChildId,
   intToConsultId,
   intToRecordId,
+  intToUserId,
   recordIdToInt,
   summaryFromSpec,
   summaryToSpec,
+  userIdToInt,
 } from "@/lib/api/spec";
 import type {
+  SpecAuthTokens,
   SpecChecklist,
   SpecChild,
   SpecConsult,
@@ -27,16 +35,25 @@ import type {
   SpecMetrics,
   SpecObservations,
   SpecPhoto,
+  SpecChildDetail,
+  SpecPasswordChange,
   SpecPhotoList,
   SpecRecord,
+  SpecRefresh,
   SpecSettings,
+  SpecUser,
+  SpecUserAccount,
 } from "@/lib/api/spec";
 import { TODAY } from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
 import type {
   AppSettings,
+  AuthUser,
   ChecklistData,
   Child,
+  ChildProfile,
+  ChildProfileInput,
+  ChildStatus,
   ConsultData,
   ConsultSession,
   DailyRecord,
@@ -46,14 +63,19 @@ import type {
   DocType,
   DocumentDraft,
   LoginInput,
-  LoginResponse,
   MetricsSummary,
   NoticeQueue,
   ObservationData,
   ObservationEntry,
+  PasswordChangeInput,
+  PasswordChangeResult,
   Photo,
   PhotoInbox,
   RecordSummary,
+  SignupInput,
+  UserAccount,
+  UserAccountInput,
+  UserAccountPatch,
 } from "@/lib/types";
 
 /**
@@ -80,17 +102,28 @@ const colorFor = (childIdInt: number) => {
 
 // ---------- 매퍼 (명세 와이어 → UI 타입) ----------
 
+/**
+ * (r7) 실 서버는 `male`·`female`·`null` 세 값을 준다 — 화면 표기는 한글이라
+ * 여기서 옮긴다. **`null`(미입력)을 "남"으로 접지 않는다**: 접으면 목록은 "남",
+ * 인적사항 패널은 "미입력"을 보여 주고, 저장만 눌러도 성별이 조용히 확정된다.
+ */
+const mapGender = (g: SpecChild["gender"]): "남" | "여" | null =>
+  g === "female" ? "여" : g === "male" ? "남" : null;
+
 function mapChild(c: SpecChild): Child {
   return {
     id: intToChildId(c.child_id),
     name: c.name,
-    birthDate: c.birth,
-    gender: c.gender ?? "남",
+    gender: mapGender(c.gender),
+    birthDate: c.birth ?? "",
     guardian: c.guardian ?? "",
     allergy: c.allergy ?? undefined,
     color: colorFor(c.child_id),
     recorded: c.recorded ?? false,
     attending: c.attending ?? true,
+    className: c.class_name,
+    // (r7) 목록 기본 조회는 재원만 주므로, 값이 없으면 재원으로 본다.
+    status: c.status ?? "enrolled",
   };
 }
 
@@ -120,29 +153,340 @@ function mapPhoto(p: SpecPhoto): Photo {
   };
 }
 
-// ---------- 인증 (EP-001, r6: 미구현) ----------
+// ---------- 인증 (EP-001·002·003·050·051) ----------
 //
-// 서버에 인증 엔드포인트(EP-001~003 `/api/auth/*`)가 아직 없다(명세 r6 1.2절) —
-// 호출하면 404다. 백엔드가 모든 요청을 고정 데모 교사로 처리하므로, 로그인은
-// 서버를 부르지 않고 클라이언트에서 데모 세션을 만들어 진행한다. 인증이 붙는
-// 시점에 이 함수만 EP-001 호출로 바꾸면 되고, 업무 API 계약은 그대로다.
-export const login = async (_input: LoginInput): Promise<LoginResponse> => {
+// 명세 r11 1.2: 액세스 JWT(15분) + 리프레시 토큰(12시간). 토큰은 응답 본문으로
+// 오며, 액세스는 메모리·리프레시는 localStorage에 둔다(client.ts tokenStore).
+// 업무 API의 401 자동 갱신도 client.ts가 처리하므로 화면은 신경 쓰지 않는다.
+
+// 화면·store는 transport(client.ts)를 직접 알지 않는다. 토큰을 어디에 어떻게
+// 두는지가 바뀌어도 이 seam만 고치면 되도록, 필요한 것만 여기서 다시 내보낸다.
+export { ApiError } from "@/lib/api/client";
+
+/** 저장한 토큰을 모두 버린다 — 로그아웃·세션 만료의 뒷정리 */
+export const clearSession = () => tokenStore.clear();
+
+/** 갱신까지 실패해 되살릴 수 없을 때 호출될 핸들러를 등록한다 */
+export const onSessionExpired = (handler: (() => void) | null) =>
+  tokenStore.onSessionExpired(handler);
+
+function mapUser(u: SpecUser): AuthUser {
   return {
-    token: "session",
-    teacher: {
-      name: "데모 교사",
-      role: "담임",
-      className: "햇님반",
-    },
+    userId: intToUserId(u.user_id),
+    name: u.name,
+    role: u.role,
+    centerId: u.center_id,
+    centerName: u.center_name,
   };
+}
+
+/** UI 입력 → EP-001 요청 본문. 우연한 필드명 일치에 기대지 않는다 */
+const loginBody = (input: LoginInput) => ({
+  username: input.username,
+  password: input.password,
+});
+
+/** 로그인·가입 응답의 토큰 두 개를 보관한다(명세 1.2.3 ⑤⑥) */
+function storeSession(res: SpecAuthTokens): AuthUser {
+  tokenStore.setAccess(res.access_token);
+  tokenStore.setRefresh(res.refresh_token);
+  return mapUser(res.user);
+}
+
+/** EP-001 POST /api/auth/login — 인증 배관이라 Bearer·자동 갱신을 붙이지 않는다 */
+export const login = async (input: LoginInput): Promise<AuthUser> => {
+  const res = await api.post<SpecAuthTokens>("/auth/login", loginBody(input), {
+    skipAuth: true,
+  });
+  return storeSession(res);
 };
 
-// ---------- 아동 (EP-004) ----------
+/** EP-051 POST /api/auth/signup — 기관 + 첫 원장 계정. 성공 시 곧바로 로그인 상태 */
+export const signup = async (input: SignupInput): Promise<AuthUser> => {
+  const res = await api.post<SpecAuthTokens>(
+    "/auth/signup",
+    {
+      center_name: input.centerName,
+      username: input.username,
+      password: input.password,
+      name: input.name,
+    },
+    { skipAuth: true },
+  );
+  return storeSession(res);
+};
 
-export const fetchChildren = async (): Promise<Child[]> => {
-  const list = await api.get<ListEnvelope<SpecChild>>("/children");
+/**
+ * EP-050 — 앱 기동 시 저장된 리프레시 토큰으로 세션을 복구한다(명세 1.2.3 ③).
+ *
+ * 갱신 자체는 `refreshAccessToken()`에 위임한다. 여기서 EP-050을 따로 부르면
+ * 갱신 경로가 두 벌이 되어 dev StrictMode의 이중 실행이 그대로 요청 2회가 되고,
+ * "갱신은 한 번만"(1.2.3 ④)이 기동 경로에서만 깨진다.
+ *
+ * 사용자 정보는 EP-003으로 따로 받는다 — 공유 프라미스는 토큰만 돌려주기 때문이다.
+ */
+export const restoreSession = async (): Promise<AuthUser | null> => {
+  if (!tokenStore.refresh) return null;
+  const outcome = await refreshAccessToken();
+  // 401은 되살릴 수 없는 상태다 — 저장한 토큰을 지운다(명세 EP-050).
+  if (outcome === "expired") {
+    tokenStore.clear();
+    return null;
+  }
+  // 서버가 잠깐 없는 것뿐이면 토큰을 남겨 두고 다음 기동에서 다시 시도한다.
+  if (outcome === "unavailable") return null;
+  try {
+    return await fetchMe();
+  } catch {
+    return null;
+  }
+};
+
+/** EP-003 GET /api/auth/me */
+export const fetchMe = async (): Promise<AuthUser> =>
+  mapUser(await api.get<SpecUser>("/auth/me"));
+
+/** EP-002 POST /api/auth/logout — 서버는 리프레시 토큰만 폐기하므로 클라이언트가 둘 다 지운다 */
+export const logout = async (): Promise<{ ok: boolean }> => {
+  try {
+    // 토큰이 없어도 호출한다 — 서버가 폐기할 게 없으면 그만이고, 호출을 건너뛰면
+    // 서버 `sessions` 행이 12시간 남아 "정리됐다"고 오해하게 된다.
+    await api.post("/auth/logout", { refresh_token: tokenStore.refresh });
+  } catch {
+    /* 로그아웃은 서버가 실패해도 화면에서는 끝나야 한다 */
+  } finally {
+    // 서버 응답과 무관하게 지운다 — 지우지 않으면 최대 15분간 유효한 액세스
+    // 토큰이 남는다(명세 EP-002 경고).
+    tokenStore.clear();
+  }
+  return { ok: true };
+};
+
+/** EP-049 POST /api/auth/password — 본인 비밀번호 변경 */
+export const changeMyPassword = async (
+  input: PasswordChangeInput,
+): Promise<PasswordChangeResult> => {
+  const res = await api.post<SpecPasswordChange>("/auth/password", {
+    current_password: input.currentPassword,
+    new_password: input.newPassword,
+    // 지금 쓰는 기기만 살린다. 이걸 보내지 않으면 자기 세션까지 끊긴다.
+    keep_refresh_token: tokenStore.refresh,
+  });
+  // 비밀번호가 바뀌면 token_version이 올라가 기존 액세스 토큰이 전부 무효가 된다.
+  // 응답의 새 토큰으로 교체하지 않으면 **다음 요청부터 401**이다(명세 1.2.3 ⑧).
+  tokenStore.setAccess(res.access_token);
+  if (res.refresh_token) tokenStore.setRefresh(res.refresh_token);
+  return { revokedSessions: res.revoked_sessions };
+};
+
+// ---------- 아동 목록 (EP-004) ----------
+
+/** 업무 화면이 쓰는 기본 명단 — 재원 아동만(명세 EP-004 기본값과 같다) */
+export const fetchChildren = (): Promise<Child[]> =>
+  fetchChildRoster("enrolled");
+
+// ---------- 아동 인적사항 (FN-021 / EP-039~042) ----------
+
+const GENDER_TO_SPEC = { 남: "male", 여: "female" } as const;
+
+function mapChildProfile(c: SpecChildDetail): ChildProfile {
+  return {
+    id: intToChildId(c.child_id),
+    name: c.name,
+    birthDate: c.birth ?? "",
+    className: c.class_name ?? "",
+    gender: mapGender(c.gender),
+    status: c.status,
+    enrolledAt: c.enrolled_at ?? "",
+    withdrawnAt: c.withdrawn_at,
+    memo: c.memo ?? "",
+  };
+}
+
+/** 빈 문자열은 "값 없음"이다 — 공백만 남은 입력도 같이 접는다 */
+const blankToNull = (v: string) => v.trim() || null;
+
+type ChildWireBody = Partial<Omit<SpecChildDetail, "child_id">>;
+
+/**
+ * UI 입력 → 명세 본문. 모드에 따라 **빈 값의 뜻이 정반대**라 반드시 갈라야 한다.
+ *
+ * - `patch`(EP-041): 키를 넣지 않은 것과 null을 보낸 것이 다르다. 넣지 않으면
+ *   기존 값 유지, null이면 값을 비운다. 그래서 빈 문자열을 null로 바꿔 보낸다.
+ * - `create`(EP-039): 선택 항목은 **생략**이 기본값 경로다. `enrolled_at`은
+ *   생략했을 때만 서버가 오늘(KST)로 채우고, `gender`는 `male`/`female`만
+ *   허용하므로 null을 보내면 입소일이 비거나 `400 VALIDATION_ERROR`가 난다.
+ */
+function childProfileBody(
+  input: Partial<ChildProfileInput>,
+  mode: "create" | "patch",
+): ChildWireBody {
+  const body: ChildWireBody = {};
+  // 생성에서는 "비우기"라는 개념이 없다 — null이 될 값은 키째 빼서 생략한다.
+  const set = <K extends keyof ChildWireBody>(
+    key: K,
+    value: ChildWireBody[K],
+  ) => {
+    if (value === null && mode === "create") return;
+    body[key] = value;
+  };
+
+  if (input.name !== undefined) body.name = input.name.trim();
+  if (input.birthDate !== undefined) set("birth", blankToNull(input.birthDate));
+  if (input.className !== undefined)
+    set("class_name", blankToNull(input.className));
+  if (input.gender !== undefined)
+    set("gender", input.gender ? GENDER_TO_SPEC[input.gender] : null);
+  if (input.enrolledAt !== undefined)
+    set("enrolled_at", blankToNull(input.enrolledAt));
+  if (input.memo !== undefined) set("memo", blankToNull(input.memo));
+  // `status`는 여기로 오지 않는다 — 입력 타입에서 뺐다(ChildProfileInput 주석 참조).
+  return body;
+}
+
+/** EP-004를 status 쿼리와 함께 부른다 — 기본은 재원만, `all`이면 퇴소 아동도 */
+export const fetchChildRoster = async (
+  status: ChildStatus | "all" = "enrolled",
+): Promise<Child[]> => {
+  const list = await api.get<ListEnvelope<SpecChild>>(
+    `/children?status=${status}`,
+  );
   return list.items.map(mapChild);
 };
+
+/** EP-040 GET /api/children/{id} — 퇴소 아동도 조회된다 */
+export const fetchChildProfile = async (
+  childId: string,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.get<SpecChildDetail>(`/children/${childIdToInt(childId)}`),
+  );
+
+/** EP-039 POST /api/children — 원장 전용 */
+export const createChild = async (
+  input: ChildProfileInput,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.post<SpecChildDetail>(
+      "/children",
+      childProfileBody(input, "create"),
+    ),
+  );
+
+/** EP-041 PATCH /api/children/{id} — 교사도 쓸 수 있다(반 배정·특이사항은 일상 업무) */
+export const updateChild = async (
+  childId: string,
+  input: Partial<ChildProfileInput>,
+): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.patch<SpecChildDetail>(
+      `/children/${childIdToInt(childId)}`,
+      childProfileBody(input, "patch"),
+    ),
+  );
+
+/** EP-042 DELETE /api/children/{id} — 원장 전용. 행을 지우지 않고 status만 바꾼다 */
+export const withdrawChild = async (childId: string): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.del<SpecChildDetail>(`/children/${childIdToInt(childId)}`),
+  );
+
+/**
+ * 퇴소 취소 — EP-041로 status를 되돌리면 withdrawn_at도 함께 지워진다(오조작 복구).
+ *
+ * `status`를 바꾸는 경로는 여기 하나뿐이다. `ChildProfileInput`에서 status를 빼
+ * 화면이 임의로 상태를 실어 보낼 수 없게 했다 — EP-041은 교사도 부를 수 있어
+ * 서버가 이 필드를 막아 주지 않으므로(EP-042 퇴소는 원장 전용인 것과 대조),
+ * 클라이언트에서 경로를 좁히는 것이 지금 할 수 있는 최선이다.
+ */
+export const reenrollChild = async (childId: string): Promise<ChildProfile> =>
+  mapChildProfile(
+    await api.patch<SpecChildDetail>(`/children/${childIdToInt(childId)}`, {
+      status: "enrolled",
+    }),
+  );
+
+// ---------- 계정 (FN-022 / EP-043~048) ----------
+
+function mapUserAccount(u: SpecUserAccount): UserAccount {
+  return {
+    userId: intToUserId(u.user_id),
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    active: u.active,
+  };
+}
+
+/** UI 입력 → EP-043 요청 본문. `center_id`는 보내지 않는다(원장 본인 기관 고정) */
+const userAccountBody = (input: UserAccountInput) => ({
+  username: input.username,
+  password: input.password,
+  name: input.name,
+  role: input.role,
+});
+
+/** UI 부분 수정 → EP-046 요청 본문. 보낸 키만 반영된다 */
+function userAccountPatchBody(patch: UserAccountPatch) {
+  const body: Record<string, unknown> = {};
+  if (patch.name !== undefined) body.name = patch.name;
+  if (patch.role !== undefined) body.role = patch.role;
+  if (patch.active !== undefined) body.active = patch.active;
+  return body;
+}
+
+/** EP-044 GET /api/users — 원장 전용. 기본은 잠긴 계정도 함께 준다 */
+export const fetchUsers = async (
+  activeOnly = false,
+): Promise<UserAccount[]> => {
+  const list = await api.get<ListEnvelope<SpecUserAccount>>(
+    activeOnly ? "/users?active=true" : "/users",
+  );
+  return list.items.map(mapUserAccount);
+};
+
+/** EP-045 GET /api/users/{id} — 원장, 또는 자기 계정에 한해 교사도 */
+export const fetchUser = async (userId: string): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.get<SpecUserAccount>(`/users/${userIdToInt(userId)}`),
+  );
+
+/** EP-043 POST /api/users — 원장 전용 */
+export const createUser = async (
+  input: UserAccountInput,
+): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.post<SpecUserAccount>("/users", userAccountBody(input)),
+  );
+
+/** EP-046 PATCH /api/users/{id} — 이름·역할·활성 상태만 */
+export const updateUser = async (
+  userId: string,
+  patch: UserAccountPatch,
+): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.patch<SpecUserAccount>(
+      `/users/${userIdToInt(userId)}`,
+      userAccountPatchBody(patch),
+    ),
+  );
+
+/** EP-047 DELETE /api/users/{id} — 잠금(소프트 삭제). 그 사용자의 세션이 전부 끊긴다 */
+export const lockUser = async (userId: string): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.del<SpecUserAccount>(`/users/${userIdToInt(userId)}`),
+  );
+
+/** EP-048 POST /api/users/{id}/password — 원장이 재설정. 현재 비밀번호를 묻지 않는다 */
+export const resetUserPassword = async (
+  userId: string,
+  newPassword: string,
+): Promise<UserAccount> =>
+  mapUserAccount(
+    await api.post<SpecUserAccount>(`/users/${userIdToInt(userId)}/password`, {
+      new_password: newPassword,
+    }),
+  );
 
 // ---------- 오늘 홈 현황 (여러 명세 EP 합성) ----------
 
@@ -330,11 +674,19 @@ export const sendDocument = async (
 
 // ---------- 사진 (EP-016~019) ----------
 
-export const uploadPhotos = async (): Promise<{
+/**
+ * EP-016 — 사진 업로드·분류 트리거. 명세상 `multipart/form-data`의 `files`
+ * 필드(파일 여러 장)가 필수다. 본문 없이 부르면 서버가 VALIDATION_ERROR로 막는다.
+ */
+export const uploadPhotos = async (
+  files: File[],
+): Promise<{
   ok: boolean;
   added: number;
 }> => {
-  const res = await api.post<ListEnvelope<SpecPhoto>>("/photos");
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file, file.name));
+  const res = await api.postForm<ListEnvelope<SpecPhoto>>("/photos", form);
   return { ok: true, added: res.total };
 };
 
@@ -574,6 +926,18 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
         ? `월 ${s.token_cost.krw.toLocaleString()}원`
         : "-",
     dailyConfirmed: s.daily_confirmed ?? [],
+    // (r9) 귀속 가능한 문서가 하나도 없으면 서버가 null을 준다.
+    byUser: (s.by_user ?? []).map((u) => ({
+      userId: intToUserId(u.user_id),
+      name: u.name,
+      confirmedCount: u.confirmed_count,
+      adoptionRate:
+        u.adoption_rate == null ? null : Math.round(u.adoption_rate * 100),
+      editRateAvgPct:
+        u.edit_rate_avg == null ? null : Math.round(u.edit_rate_avg * 100),
+      perDocTime: fmtMinutes(u.avg_minutes_per_doc),
+    })),
+    unattributedCount: s.unattributed_count ?? 0,
   };
 };
 
