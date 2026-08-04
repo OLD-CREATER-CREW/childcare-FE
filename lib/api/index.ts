@@ -340,9 +340,7 @@ function childProfileBody(
   if (input.enrolledAt !== undefined)
     set("enrolled_at", blankToNull(input.enrolledAt));
   if (input.memo !== undefined) set("memo", blankToNull(input.memo));
-  // status는 EP-039 요청 표에 없다 — 생성에는 싣지 않는다.
-  if (input.status !== undefined && mode === "patch")
-    body.status = input.status;
+  // `status`는 여기로 오지 않는다 — 입력 타입에서 뺐다(ChildProfileInput 주석 참조).
   return body;
 }
 

@@ -274,7 +274,10 @@ export type ChildProfileInput = {
   gender?: "남" | "여" | null;
   enrolledAt?: string;
   memo?: string;
-  status?: ChildStatus;
+  // `status`는 일부러 없다. 퇴소는 EP-042(원장 전용), 퇴소 취소는 seam의
+  // `reenrollChild` 전용 경로로만 보낸다 — EP-041은 교사도 부를 수 있고 서버가
+  // 이 필드를 막아 주지 않아(실측 확인), 일반 수정 입력에 열어 두면 화면 어디서든
+  // 상태를 바꿀 수 있는 구멍이 된다.
 };
 
 // ---------- FN-022 계정 관리 (SCR-017) ----------
