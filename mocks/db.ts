@@ -982,13 +982,17 @@ export function getNoticeQueue(): NoticeQueue {
         childId: c.id,
         name: c.name,
         color: c.color,
-        status: (doc?.status ?? "draft") as DocStatus,
+        // 실 서버와 같은 규약 — 초안이 없으면 null("생성 전").
+        status: (doc?.status ?? null) as DocStatus | null,
       };
     });
   return {
-    generated: items.length,
+    generated: items.filter((i) => i.status !== null).length,
+    ready: items.length,
     total: state.children.length,
-    confirmed: items.filter((i) => i.status !== "draft").length,
+    confirmed: items.filter(
+      (i) => i.status === "confirmed" || i.status === "sent",
+    ).length,
     sent: items.filter((i) => i.status === "sent").length,
     queue: items,
     excluded: state.children

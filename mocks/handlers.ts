@@ -130,6 +130,7 @@ const DOC_TO_SPEC: Record<DocType, SpecDocType> = {
   notice: "notice",
   journal: "journal",
   plan: "weekly_plan",
+  plan_monthly: "monthly_plan",
   evaluation: "dev_eval",
 };
 

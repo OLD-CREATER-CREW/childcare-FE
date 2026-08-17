@@ -277,6 +277,13 @@
     @apply grid items-start gap-5;
     grid-template-columns: minmax(240px, 0.85fr) 1.3fr;
   }
+  /* 문서 워크벤치 — 읽는 것은 오른쪽 초안이므로 원천 기록보다 넓게 준다.
+     원천 기록은 대조용이라 좁아도 되지만, 초안이 좁으면 줄바꿈이 잦아져
+     긴 문서(발달평가서 등)가 세로로 한없이 길어진다. */
+  .grid-doc {
+    @apply grid items-start gap-5;
+    grid-template-columns: minmax(280px, 0.8fr) 1.6fr;
+  }
   .grid3 {
     @apply grid grid-cols-3 gap-5;
   }
@@ -766,7 +773,8 @@
     padding: 20px 16px 140px;
   }
   .grid2,
-  .grid3 {
+  .grid3,
+  .grid-doc {
     grid-template-columns: 1fr;
   }
   .bottomtab {

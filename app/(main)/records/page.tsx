@@ -14,6 +14,7 @@ import {
 import {
   Avatar,
   N,
+  Notice,
   PageHead,
   Select,
   Skeleton,
@@ -28,6 +29,51 @@ const LUNCH_OPTIONS: MealAmount[] = [
   "거의 안 먹음",
 ];
 const NAP_OPTIONS: NapQuality[] = ["잘 잤어요", "뒤척였어요", "못 잤어요"];
+
+/**
+ * 낮잠 시각 선택지 — 자유 입력 대신 드롭다운을 쓴다.
+ *
+ * 시각은 저장할 때 `HH:MM~HH:MM (품질)` 한 문자열로 합쳐지고, 읽을 때 그 형식을
+ * 정규식으로 되판다. 손으로 "1시20분"처럼 적으면 파싱이 깨져 화면이 기본값을
+ * 보여 주게 된다 — 아이가 얼마나 잤는지를 앱이 지어내는 셈이라 위험하다.
+ * 고를 수 있는 값만 두면 그 경로가 아예 없어진다.
+ *
+ * 낮잠은 대개 정오~오후 4시 사이라 그 구간을 10분 간격으로 낸다.
+ */
+const NAP_TIME_OPTIONS: string[] = (() => {
+  const times: string[] = [];
+  for (let minutes = 11 * 60; minutes <= 16 * 60; minutes += 10) {
+    const h = `${Math.floor(minutes / 60)}`.padStart(2, "0");
+    const m = `${minutes % 60}`.padStart(2, "0");
+    times.push(`${h}:${m}`);
+  }
+  return times;
+})();
+
+/**
+ * 날짜 선택지 — 오늘부터 최근 2주.
+ *
+ * 예전에는 `2026-07-16`·`2026-07-15` 두 날짜가 박혀 있었다. 오늘이 그 날이
+ * 아니면 드롭다운이 "선택"으로 비어 보이고, 고르는 순간 기록이 없는 날로
+ * 넘어간다.
+ */
+const DATE_OPTIONS: { value: string; label: string }[] = (() => {
+  const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
+  const out: { value: string; label: string }[] = [];
+  const cursor = new Date();
+  for (let i = 0; i < 14; i += 1) {
+    const y = cursor.getFullYear();
+    const m = `${cursor.getMonth() + 1}`.padStart(2, "0");
+    const d = `${cursor.getDate()}`.padStart(2, "0");
+    const value = `${y}-${m}-${d}`;
+    out.push({
+      value,
+      label: `${value} (${WEEKDAY[cursor.getDay()]})${i === 0 ? " · 오늘" : ""}`,
+    });
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return out;
+})();
 
 const EMPTY_FORM = {
   activities: ["바깥놀이"] as string[],
@@ -80,6 +126,22 @@ function RecordForm() {
   }, [childId, kids, recordedIds]);
 
   const [form, setForm] = useState(EMPTY_FORM);
+
+  /**
+   * 저장된 시각이 10분 격자에 없을 수도 있다(예전 기록·다른 경로로 들어온 값).
+   * 그럴 때 목록에 없으면 Select가 "선택"으로 비어 보이고, 그대로 저장하면
+   * 원래 시각이 사라진다. 현재 값을 목록에 끼워 넣어 그 경로를 막는다.
+   */
+  const napTimeOptions = useMemo(() => {
+    const extra = [form.napFrom, form.napTo].filter(
+      (t) => t && !NAP_TIME_OPTIONS.includes(t),
+    );
+    if (!extra.length) return NAP_TIME_OPTIONS;
+    const merged = NAP_TIME_OPTIONS.concat(
+      extra.filter((t, i) => extra.indexOf(t) === i),
+    );
+    return merged.sort();
+  }, [form.napFrom, form.napTo]);
   const child = kids.find((c) => c.id === childId);
   const existing = recordQuery.data?.record ?? null;
 
@@ -145,10 +207,7 @@ function RecordForm() {
             value={date}
             onChange={setDate}
             ariaLabel="날짜"
-            options={[
-              { value: "2026-07-16", label: "2026-07-16 (목)" },
-              { value: "2026-07-15", label: "2026-07-15 (수)" },
-            ]}
+            options={DATE_OPTIONS}
           />
         }
       />
@@ -222,6 +281,34 @@ function RecordForm() {
               )}
             </div>
 
+            {/* 이 폼이 표현할 수 없는 형식으로 저장된 기록이면, 아래 선택칸은
+                진짜 값이 아니라 기본값이다. 모르고 저장하면 원래 기록이
+                지워지므로 원문을 먼저 보여 준다. */}
+            {existing &&
+              (recordQuery.data?.record?.mealParsed === false ||
+                recordQuery.data?.record?.napParsed === false) && (
+                <div className="mb-4">
+                  <Notice kind="warn">
+                    <b>이 기록은 아래 선택칸으로 옮겨 담을 수 없는 형식입니다.</b>
+                    <br />
+                    저장된 원문 —{" "}
+                    {recordQuery.data?.record?.mealParsed === false && (
+                      <>
+                        식사: <b>{recordQuery.data.record.rawMeal || "—"}</b>{" "}
+                      </>
+                    )}
+                    {recordQuery.data?.record?.napParsed === false && (
+                      <>
+                        낮잠: <b>{recordQuery.data.record.rawNap || "—"}</b>
+                      </>
+                    )}
+                    <br />
+                    아래 값은 기본값이라 사실과 다릅니다. 이대로 저장하면 위
+                    원문이 지워집니다.
+                  </Notice>
+                </div>
+              )}
+
             {recordQuery.isLoading ? (
               <Skeleton lines={6} />
             ) : (
@@ -273,31 +360,34 @@ function RecordForm() {
                       options={LUNCH_OPTIONS}
                     />
                   </div>
+                  {/* 시각 두 개와 상태는 한 줄로 붙어 있어야 "언제부터 언제까지"로
+                      읽힌다. 줄바꿈되면 두 시각이 위아래로 흩어져 무슨 값인지
+                      알 수 없다 — 그래서 flex-nowrap. */}
                   <div className="field m-0">
                     <label>
                       <N n={4} />
                       낮잠
                     </label>
-                    <span className="inline">
-                      <input
-                        className="input w-[84px]"
+                    <span className="flex flex-nowrap items-center gap-2">
+                      <Select
+                        className="w-[92px] shrink-0"
+                        ariaLabel="낮잠 시작"
                         value={form.napFrom}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, napFrom: e.target.value }))
+                        onChange={(v) =>
+                          setForm((f) => ({ ...f, napFrom: v }))
                         }
-                        aria-label="낮잠 시작"
+                        options={napTimeOptions}
                       />
-                      <span className="text-muted">~</span>
-                      <input
-                        className="input w-[84px]"
+                      <span className="shrink-0 text-muted">~</span>
+                      <Select
+                        className="w-[92px] shrink-0"
+                        ariaLabel="낮잠 종료"
                         value={form.napTo}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, napTo: e.target.value }))
-                        }
-                        aria-label="낮잠 종료"
+                        onChange={(v) => setForm((f) => ({ ...f, napTo: v }))}
+                        options={napTimeOptions}
                       />
                       <Select
-                        className="w-fit"
+                        className="w-[124px] shrink-0"
                         ariaLabel="낮잠 상태"
                         value={form.napQuality}
                         onChange={(v) =>

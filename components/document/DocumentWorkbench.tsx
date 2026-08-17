@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, RefreshCw, Send, Sparkles } from "lucide-react";
+import {
+  CheckCircle2,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import { useApp } from "@/lib/store";
 import {
   useConfirmDocument,
@@ -36,6 +43,9 @@ export function DocumentWorkbench({
   allowSend = false,
   sidePanel,
   emptyMessage,
+  topic,
+  generateLabel = "초안 만들기",
+  generateHint,
 }: {
   type: DocType;
   childId?: string | null;
@@ -44,6 +54,11 @@ export function DocumentWorkbench({
   sidePanel?: React.ReactNode;
   /** 초안 생성 불가(404) 시 안내 문구 — 알림장의 "하루 기록 없음" 등 */
   emptyMessage?: React.ReactNode;
+  /** 계획안에서 교사가 정한 놀이 주제. 생성 요청에 실려 간다. */
+  topic?: string;
+  generateLabel?: string;
+  /** 「초안 만들기」 위에 띄울 안내 — 계획안의 "주제를 먼저 적으세요" 등 */
+  generateHint?: React.ReactNode;
 }) {
   const { toast } = useApp();
   const draftQuery = useDocumentDraft(type, childId);
@@ -58,12 +73,31 @@ export function DocumentWorkbench({
   const [working, setWorking] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
+  /** 원천 기록 패널을 접어 문서를 화면 폭 전체로 본다. 시연·긴 문서 검토용. */
+  const [wide, setWide] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const editorRef = useRef<HTMLTextAreaElement>(null);
 
   // 초안 로드·아이 전환 시 에디터 동기화
   useEffect(() => {
-    if (doc) setWorking(doc.working);
+    setWorking(doc ? doc.working : "");
   }, [doc]);
+
+  /**
+   * 내용 높이에 맞춰 편집창을 늘린다.
+   *
+   * 고정 높이(min-h-150px)로 두면 발달평가서처럼 긴 문서가 3~4줄 창에 갇혀
+   * 안쪽 스크롤바가 생긴다. 페이지 스크롤과 따로 놀아서 읽기가 불편했다.
+   * 창이 내용만큼 자라면 스크롤은 페이지 하나로 끝난다.
+   */
+  const autoGrow = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  useEffect(autoGrow, [working, wide, autoGrow]);
 
   // 작업본 자동 저장 — 입력 멈춤 0.8초 후 EP-013
   useEffect(() => {
@@ -110,7 +144,7 @@ export function DocumentWorkbench({
 
   const regen = () =>
     regenMutation.mutate(
-      { type, childId },
+      { type, childId, topic },
       { onSuccess: () => toast("초안을 새로 만들었습니다") },
     );
 
@@ -121,11 +155,15 @@ export function DocumentWorkbench({
   return (
     <>
       <div className="flowrail">
-        <span className="st done">
+        {/* 초안이 없으면 첫 단계가 아직 안 끝난 것이다 — 예전에는 늘 done이라
+            버튼을 누르기도 전에 "생성 완료"로 보였다. */}
+        <span className={`st ${doc ? "done" : "on"}`}>
           <Sparkles size={13} /> 초안 생성
         </span>
         <span className="ln" />
-        <span className={`st ${status === "draft" ? "on" : "done"}`}>
+        <span
+          className={`st ${!doc ? "" : status === "draft" ? "on" : "done"}`}
+        >
           검토·수정
         </span>
         <span className="ln" />
@@ -144,19 +182,21 @@ export function DocumentWorkbench({
         )}
       </div>
 
-      <div className="grid2">
-        <div className="card">
-          <h2>
-            <N n={1} />
-            원천 기록 <span className="hint">source_record_ids</span>
-          </h2>
-          {source}
-          <div className="mt-3">
-            <Notice kind="soft">
-              초안이 어떤 기록에서 나왔는지 나란히 두고 사실과 대조하세요.
-            </Notice>
+      <div className={wide ? "grid gap-5" : "grid-doc"}>
+        {!wide && (
+          <div className="card">
+            <h2>
+              <N n={1} />
+              원천 기록 <span className="hint">source_record_ids</span>
+            </h2>
+            {source}
+            <div className="mt-3">
+              <Notice kind="soft">
+                초안이 어떤 기록에서 나왔는지 나란히 두고 사실과 대조하세요.
+              </Notice>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="card">
           <div className="flex min-h-[30px] flex-wrap items-center gap-2">
@@ -188,18 +228,28 @@ export function DocumentWorkbench({
                 편집거리 {doc?.editDistance}%
               </span>
             )}
+            {doc && (
+              <button
+                className="btn ml-auto px-2.5 py-1 text-[12.5px]"
+                onClick={() => setWide((v) => !v)}
+                title={wide ? "원천 기록을 다시 보기" : "문서를 넓게 보기"}
+              >
+                {wide ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                {wide ? "나란히 보기" : "넓게 보기"}
+              </button>
+            )}
           </div>
 
           {draftQuery.isLoading || regenMutation.isPending ? (
             <div className="draftbox">
-              <Skeleton lines={4} />
+              <Skeleton lines={8} />
               <div className="hint">
                 {regenMutation.isPending
-                  ? "AI가 초안을 다시 쓰는 중…"
-                  : "AI 초안을 불러오는 중…"}
+                  ? "AI가 초안을 쓰는 중… 문서 한 건에 20~40초쯤 걸립니다."
+                  : "초안을 불러오는 중…"}
               </div>
             </div>
-          ) : notFound ? (
+          ) : notFound || regenMutation.isError ? (
             <EmptyState
               icon="📝"
               title="아직 초안을 만들 수 없어요"
@@ -212,12 +262,40 @@ export function DocumentWorkbench({
             <div className="mt-3">
               <QueryError onRetry={() => draftQuery.refetch()} />
             </div>
+          ) : !doc ? (
+            /* 초안이 없는 상태 — 화면을 연 것만으로 만들지 않는다. 사람이 누른다. */
+            <div className="draftbox flex flex-col items-center gap-3 py-10 text-center">
+              <span className="text-[26px]">✨</span>
+              <p className="m-0 text-[14px] font-semibold text-ink">
+                아직 초안이 없습니다
+              </p>
+              <p className="m-0 max-w-[46ch] text-[13px] leading-relaxed text-muted">
+                {generateHint ?? (
+                  <>
+                    왼쪽 원천 기록을 바탕으로 AI가 초안을 씁니다. 20~40초쯤
+                    걸리고, 나온 초안은 <b>선생님이 검토·수정한 뒤에</b>{" "}
+                    확정합니다.
+                  </>
+                )}
+              </p>
+              <button
+                className="btn primary mt-1"
+                onClick={regen}
+                disabled={regenMutation.isPending}
+              >
+                <Sparkles size={15} />
+                {generateLabel}
+              </button>
+            </div>
           ) : status === "draft" ? (
             <div className="draftbox">
               <textarea
+                ref={editorRef}
                 value={working}
                 onChange={(e) => setWorking(e.target.value)}
-                className="min-h-[150px] w-full resize-y border-0 bg-transparent leading-[1.75] [font:inherit] focus:outline-none"
+                onInput={autoGrow}
+                rows={1}
+                className="w-full resize-none overflow-hidden border-0 bg-transparent text-[15px] leading-[1.9] [font-family:inherit] focus:outline-none"
                 aria-label="초안 편집"
               />
               <div className="hint">
@@ -227,7 +305,7 @@ export function DocumentWorkbench({
             </div>
           ) : (
             <motion.div
-              className="draftbox confirmed whitespace-pre-wrap leading-[1.75]"
+              className="draftbox confirmed whitespace-pre-wrap text-[15px] leading-[1.9]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.3 }}
@@ -236,7 +314,7 @@ export function DocumentWorkbench({
             </motion.div>
           )}
 
-          {!notFound && (
+          {!notFound && doc && (
             <div className="btnrow">
               {status === "draft" && (
                 <>
@@ -286,7 +364,7 @@ export function DocumentWorkbench({
             </div>
           )}
 
-          {allowSend && status === "draft" && !notFound && (
+          {allowSend && status === "draft" && !notFound && doc && (
             <div className="mt-3.5">
               <Notice kind="info">
                 🔒 「발송」 버튼은 <b>확정 후에만</b> 나타납니다.

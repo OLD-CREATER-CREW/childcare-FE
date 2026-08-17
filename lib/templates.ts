@@ -49,7 +49,8 @@ export function isDesktop(): boolean {
 export const DOC_TYPE_LABEL: Record<DocType, string> = {
   notice: "알림장",
   journal: "보육일지",
-  plan: "계획안",
+  plan: "주간 계획안",
+  plan_monthly: "월간 계획안",
   evaluation: "발달평가서",
 };
 

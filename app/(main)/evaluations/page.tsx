@@ -1,17 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useChildren, useObservations } from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import {
   Avatar,
-  N,
   Notice,
   PageHead,
   Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
+import type { DevelopmentDomain, ObservationEntry } from "@/lib/types";
 
 // SCR-011 발달평가서 — 누적 관찰 종합 (아동 단위 문서)
 export default function EvaluationsPage() {
@@ -66,19 +67,18 @@ export default function EvaluationsPage() {
             {obsQuery.isLoading ? (
               <Skeleton lines={5} />
             ) : (
-              <table className="tbl">
-                <tbody>
-                  {obsQuery.data?.domains.map((d) => (
-                    <tr key={d.name}>
-                      <td>
-                        <N n={2} />
-                        {d.name}
-                      </td>
-                      <td className="text-right font-bold">관찰 {d.count}건</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="flex flex-col">
+                {obsQuery.data?.domains.map((d) => (
+                  <DomainFold
+                    key={d.name}
+                    name={d.name}
+                    count={d.count}
+                    memos={(obsQuery.data?.timeline ?? []).filter((r) =>
+                      r.tags.includes(d.name as DevelopmentDomain),
+                    )}
+                  />
+                ))}
+              </div>
             )}
             <div className="mt-3">
               <Notice kind="soft">
@@ -90,5 +90,67 @@ export default function EvaluationsPage() {
         }
       />
     </>
+  );
+}
+
+/**
+ * 영역 한 줄을 눌러 그 영역으로 태깅된 관찰 메모를 펼쳐 본다.
+ *
+ * "신체운동 관찰 4건"만 보여 주면 교사는 그 4건이 무엇이었는지 확인할 방법이
+ * 없다. 초안이 사실과 맞는지 대조하려면 근거가 된 메모를 그 자리에서 볼 수
+ * 있어야 한다 — 원천 패널의 존재 이유가 그것이다.
+ */
+function DomainFold({
+  name,
+  count,
+  memos,
+}: {
+  name: string;
+  count: number;
+  memos: ObservationEntry[];
+}) {
+  const [open, setOpen] = useState(false);
+  const empty = count === 0;
+
+  return (
+    <div className="border-b border-line last:border-b-0">
+      <button
+        className="flex w-full items-center gap-2 py-2.5 text-left disabled:cursor-default"
+        onClick={() => setOpen((v) => !v)}
+        disabled={empty}
+        aria-expanded={open}
+      >
+        <ChevronRight
+          size={14}
+          className={`shrink-0 text-muted transition-transform ${
+            open ? "rotate-90" : ""
+          } ${empty ? "opacity-0" : ""}`}
+        />
+        <span className="flex-1 text-[13.5px]">{name}</span>
+        <span
+          className={`text-[13px] font-bold ${empty ? "text-muted" : "text-ink"}`}
+        >
+          {empty ? "관찰 없음" : `관찰 ${count}건`}
+        </span>
+      </button>
+
+      {open && memos.length > 0 && (
+        <ul className="m-0 mb-3 list-none space-y-2 border-l-2 border-line-strong pl-3">
+          {memos.map((m) => (
+            <li key={m.id} className="text-[12.5px] leading-relaxed">
+              <span className="mr-1.5 font-mono text-[11.5px] text-muted">
+                {m.date.slice(5)}
+              </span>
+              {m.manualTag && (
+                <span className="mr-1 text-[11px] text-muted" title="수동 태그">
+                  ✎
+                </span>
+              )}
+              <span className="text-ink">{m.memo}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

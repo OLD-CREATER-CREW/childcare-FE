@@ -22,7 +22,7 @@ import {
 } from "@/components/ui";
 import { TODAY } from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
-import type { ObservationEntry } from "@/lib/types";
+import type { DevelopmentDomain, ObservationEntry } from "@/lib/types";
 
 // SCR-008 관찰·발달영역 조회 — 발달평가서(FN-011)의 원료
 export default function ObservationsPage() {
@@ -41,9 +41,23 @@ export default function ObservationsPage() {
   const [editTarget, setEditTarget] = useState<ObservationEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [newMemo, setNewMemo] = useState("");
-  const [newTag, setNewTag] = useState<(typeof DEV_DOMAINS)[number] | null>(
-    null,
-  );
+
+  // 태그는 여러 개를 고를 수 있다 — 놀이 하나가 여러 영역에 걸치는 게 보통이다.
+  // 여러 개일 때는 고르는 즉시 저장할 수 없으므로(무엇이 최종인지 알 수 없다)
+  // 고른 뒤 「저장」을 누르는 흐름으로 간다.
+  const [newTags, setNewTags] = useState<DevelopmentDomain[]>([]);
+  const [editTags, setEditTags] = useState<DevelopmentDomain[]>([]);
+
+  const toggle = (
+    list: DevelopmentDomain[],
+    set: (v: DevelopmentDomain[]) => void,
+    d: DevelopmentDomain,
+  ) => set(list.includes(d) ? list.filter((x) => x !== d) : [...list, d]);
+
+  const openEdit = (row: ObservationEntry) => {
+    setEditTags(row.tags ?? []);
+    setEditTarget(row);
+  };
 
   const child = kids.find((c) => c.id === childId);
   const maxCount = useMemo(
@@ -51,13 +65,17 @@ export default function ObservationsPage() {
     [obsQuery.data],
   );
 
-  const applyTag = (tag: (typeof DEV_DOMAINS)[number]) => {
+  const applyTags = () => {
     if (!editTarget) return;
     tagMutation.mutate(
-      { id: editTarget.id, tag },
+      { id: editTarget.id, tags: editTags },
       {
         onSuccess: () => {
-          toast("수동 태그로 저장 — 이후 자동 태깅이 덮어쓰지 않습니다");
+          toast(
+            editTags.length
+              ? `${editTags.join(" · ")} 수동 태그로 저장 — 자동 태깅이 덮어쓰지 않습니다`
+              : "태그를 모두 지웠습니다",
+          );
           setEditTarget(null);
         },
       },
@@ -66,19 +84,19 @@ export default function ObservationsPage() {
 
   const openAdd = () => {
     setNewMemo("");
-    setNewTag(null);
+    setNewTags([]);
     setAddOpen(true);
   };
 
   const submitAdd = () => {
     if (!newMemo.trim()) return;
     addMutation.mutate(
-      { childId, tag: newTag, memo: newMemo },
+      { childId, tags: newTags, memo: newMemo },
       {
         onSuccess: () => {
           toast(
-            newTag
-              ? `관찰 기록을 추가했습니다 — ${newTag} 수동 태그로 저장`
+            newTags.length
+              ? `관찰 기록을 추가했습니다 — ${newTags.join(" · ")} 수동 태그로 저장`
               : "관찰 기록을 추가했습니다 — 태그는 나중에 달 수 있어요",
           );
           setAddOpen(false);
@@ -204,7 +222,7 @@ export default function ObservationsPage() {
                   {r.memo}{" "}
                   <button
                     className="btn ghost px-2 py-0.5 text-xs"
-                    onClick={() => setEditTarget(r)}
+                    onClick={() => openEdit(r)}
                   >
                     <PencilLine size={12} />
                     {r.tag ? "태그 수정" : "태그 달기"}
@@ -237,13 +255,19 @@ export default function ObservationsPage() {
           />
         </div>
         <div className="field">
-          <label>발달영역 (선택)</label>
+          <label>
+            발달영역 (선택){" "}
+            <span className="font-normal text-muted">
+              — 여러 개 고를 수 있어요
+            </span>
+          </label>
           <div className="chiprow">
             {DEV_DOMAINS.map((d) => (
               <button
                 key={d}
-                className={`chip ${newTag === d ? "on" : ""}`}
-                onClick={() => setNewTag(newTag === d ? null : d)}
+                className={`chip ${newTags.includes(d) ? "on" : ""}`}
+                onClick={() => toggle(newTags, setNewTags, d)}
+                aria-pressed={newTags.includes(d)}
               >
                 {d}
               </button>
@@ -272,20 +296,39 @@ export default function ObservationsPage() {
       >
         <h3>발달영역 태그 선택</h3>
         <div className="desc">
-          「{editTarget?.memo}」<br />이 메모의 발달영역을 직접 지정합니다. 수동
-          태그는 자동 태깅이 덮어쓰지 않습니다.
+          「{editTarget?.memo}」<br />이 메모의 발달영역을 직접 지정합니다.{" "}
+          <b>여러 개 고를 수 있어요</b> — 놀이 하나가 여러 영역에 걸치는 경우가
+          많습니다. 수동 태그는 자동 태깅이 덮어쓰지 않습니다.
         </div>
         <div className="chiprow mt-4">
           {DEV_DOMAINS.map((d) => (
             <button
               key={d}
-              className={`chip ${editTarget?.tag === d ? "on" : ""}`}
-              onClick={() => applyTag(d)}
+              className={`chip ${editTags.includes(d) ? "on" : ""}`}
+              onClick={() => toggle(editTags, setEditTags, d)}
+              aria-pressed={editTags.includes(d)}
               disabled={tagMutation.isPending}
             >
               {d}
             </button>
           ))}
+        </div>
+        <p className="mt-3 text-[12.5px] text-muted">
+          {editTags.length
+            ? `선택: ${editTags.join(" · ")}`
+            : "선택한 영역이 없습니다 — 이대로 저장하면 태그가 지워집니다."}
+        </p>
+        <div className="btnrow mt-4">
+          <button
+            className="btn primary"
+            onClick={applyTags}
+            disabled={tagMutation.isPending}
+          >
+            {tagMutation.isPending ? "저장 중…" : "저장"}
+          </button>
+          <button className="btn" onClick={() => setEditTarget(null)}>
+            취소
+          </button>
         </div>
       </Modal>
     </>
