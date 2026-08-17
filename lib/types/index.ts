@@ -39,6 +39,12 @@ export type DailyRecord = {
   napQuality: NapQuality;
   memo: string;
   savedAt: string | null;
+  /** 서버에 저장된 원문. 구조 필드로 파싱이 안 될 때 이것을 보여 준다. */
+  rawMeal?: string;
+  rawNap?: string;
+  /** 위 구조 필드를 믿어도 되는지. false면 기본값이라 사실이 아니다. */
+  mealParsed?: boolean;
+  napParsed?: boolean;
 };
 
 export type DailyRecordInput = Omit<DailyRecord, "savedAt">;
@@ -56,7 +62,19 @@ export type RecordSummary = {
 
 export type DocStatus = "draft" | "confirmed" | "sent";
 
-export type DocType = "notice" | "journal" | "plan" | "evaluation";
+/**
+ * 화면이 다루는 문서 종류.
+ *
+ * 계획안은 주간·월간이 서로 다른 문서다(칸 구성도 기간도 다르다). 예전에는
+ * 둘 다 `plan` 하나였고 와이어로는 늘 `weekly_plan`이 나갔다 — 화면의
+ * 주간/월간 토글이 아무것도 바꾸지 못했다.
+ */
+export type DocType =
+  | "notice"
+  | "journal"
+  | "plan"
+  | "plan_monthly"
+  | "evaluation";
 
 export type DocumentDraft = {
   type: DocType;
@@ -75,15 +93,37 @@ export type DocumentDraft = {
 
 // ---------- 알림장 대기열 ----------
 
+// ---------- 활동 추천 (EP-027) ----------
+
+export type ActivityRecommendation = {
+  title: string;
+  /** 발달영역 코드(physical·communication·social·art·nature) */
+  domain: string;
+  /** 왜 이걸 골랐는지 — 교사가 판단 근거를 볼 수 있어야 한다 */
+  reason: string;
+};
+
+export type ActivityRecommendations = {
+  items: ActivityRecommendation[];
+  total: number;
+  /** 무엇을 기준으로 고른 목록인지 화면에 밝히기 위한 값 */
+  season: string | null;
+  ageLabel: string | null;
+};
+
 export type NoticeQueueItem = {
   childId: string;
   name: string;
   color: string;
-  status: DocStatus;
+  /** 초안이 아직 없으면 `null` — "생성 전"과 "생성했고 검토 대기"는 다른 상태다. */
+  status: DocStatus | null;
 };
 
 export type NoticeQueue = {
+  /** 초안이 실제로 만들어진 아이 수. */
   generated: number;
+  /** 오늘 하루 기록이 있어 초안을 만들 수 있는 아이 수. */
+  ready: number;
   total: number;
   confirmed: number;
   sent: number;

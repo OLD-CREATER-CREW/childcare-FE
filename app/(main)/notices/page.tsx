@@ -20,10 +20,18 @@ import {
   SpecBar,
 } from "@/components/ui";
 
-function statusLabel(status: string) {
+function statusLabel(status: string | null) {
+  if (status === null) return "생성 전";
   if (status === "sent") return "발송됨";
   if (status === "confirmed") return "확정됨";
   return "검토 대기";
+}
+
+function statusColor(status: string | null) {
+  if (status === null) return "text-muted";
+  if (status === "sent") return "text-confirm";
+  if (status === "confirmed") return "text-blue";
+  return "text-amber";
 }
 
 // SCR-004 알림장 검토·확정 — 생성만 일괄, 검토·확정은 아이별
@@ -46,12 +54,15 @@ function NoticesContent() {
 
   const [childId, setChildId] = useState(params.get("child") ?? "");
 
-  // 선택이 없으면 첫 번째 검토 대기 아이를 자동 선택
+  // 선택이 없으면 손이 가야 할 아이를 먼저 고른다 — 아직 안 만든 아이 →
+  // 만들었지만 검토 대기인 아이 → 그 외 순서.
   useEffect(() => {
     if (childId || !queue) return;
-    const firstDraft =
-      queue.queue.find((q) => q.status === "draft") ?? queue.queue[0];
-    if (firstDraft) setChildId(firstDraft.childId);
+    const next =
+      queue.queue.find((q) => q.status === null) ??
+      queue.queue.find((q) => q.status === "draft") ??
+      queue.queue[0];
+    if (next) setChildId(next.childId);
   }, [queue, childId]);
 
   const recordQuery = useDailyRecord(childId, TODAY);
@@ -80,12 +91,15 @@ function NoticesContent() {
           <N n={1} />
           오늘 알림장 진행 현황
           <button
-            className="btn primary ml-auto px-3 py-1.5"
+            className="btn ml-auto px-3 py-1.5"
             onClick={runGenerateAll}
-            disabled={generateAll.isPending || !queue || queue.generated === 0}
+            disabled={generateAll.isPending || !queue || queue.ready === 0}
+            title="기록이 있는 아이 전원의 초안을 한 번에 만듭니다"
           >
             <Sparkles size={14} />
-            {generateAll.isPending ? "생성 중…" : "전체 생성"}
+            {generateAll.isPending
+              ? "생성 중…"
+              : `전체 생성 (${queue ? queue.ready - queue.generated : 0}건)`}
           </button>
         </h2>
         {queueQuery.isLoading || !queue ? (
@@ -94,11 +108,11 @@ function NoticesContent() {
           <>
             <div className="inline gap-3.5">
               <div className="min-w-[200px] flex-1">
-                <Progress value={queue.confirmed} max={queue.generated} />
+                <Progress value={queue.generated} max={queue.ready} />
               </div>
               <span className="text-[13px] font-bold">
-                초안 {queue.generated}건 · 확정 {queue.confirmed}건 · 발송{" "}
-                {queue.sent}건
+                기록 {queue.ready}명 · 초안 {queue.generated}건 · 확정{" "}
+                {queue.confirmed}건 · 발송 {queue.sent}건
               </span>
             </div>
             <div className="mt-3.5 flex flex-wrap gap-2">
@@ -111,13 +125,7 @@ function NoticesContent() {
                   <Avatar name={item.name} color={item.color} size="sm" />
                   {item.name}
                   <span
-                    className={`text-[11px] font-bold ${
-                      item.status === "sent"
-                        ? "text-confirm"
-                        : item.status === "confirmed"
-                          ? "text-blue"
-                          : "text-amber"
-                    }`}
+                    className={`text-[11px] font-bold ${statusColor(item.status)}`}
                   >
                     {statusLabel(item.status)}
                   </span>
@@ -147,18 +155,24 @@ function NoticesContent() {
                     </td>
                     <td>{record.activities.join(", ") || "—"}</td>
                   </tr>
+                  {/* 파싱이 안 된 기록은 원문을 그대로 보여 준다 — 구조 필드는
+                      기본값이라 사실이 아니다(decodeSpecRecord 주석 참조). */}
                   <tr>
                     <td className="whitespace-nowrap text-muted">
                       점심 · 간식
                     </td>
                     <td>
-                      {record.lunch} · {record.snack}
+                      {record.mealParsed === false
+                        ? record.rawMeal || "—"
+                        : `${record.lunch} · ${record.snack}`}
                     </td>
                   </tr>
                   <tr>
                     <td className="whitespace-nowrap text-muted">낮잠</td>
                     <td>
-                      {record.napFrom} ~ {record.napTo} · {record.napQuality}
+                      {record.napParsed === false
+                        ? record.rawNap || "—"
+                        : `${record.napFrom} ~ ${record.napTo} · ${record.napQuality}`}
                     </td>
                   </tr>
                   <tr>

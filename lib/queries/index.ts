@@ -38,6 +38,8 @@ export const queryKeys = {
   childProfile: (childId: string) => ["children", "profile", childId] as const,
   users: (activeOnly: boolean) => ["users", "list", activeOnly] as const,
   user: (userId: string) => ["users", "detail", userId] as const,
+  activityRecommendations: (className: string | null) =>
+    ["activities", "recommend", className ?? "all"] as const,
 };
 
 // ---- Queries ----
@@ -78,6 +80,20 @@ export const useNoticeQueue = () =>
   useQuery({
     queryKey: queryKeys.noticeQueue,
     queryFn: apiFn.fetchNoticeQueue,
+  });
+
+/**
+ * EP-027 활동 추천. 계획안 주제를 정할 때 참고한다.
+ *
+ * 서버가 실패해도 200 + 빈 목록으로 답하도록 돼 있어(FN-013 예외 2) 재시도하지
+ * 않는다 — 추천은 참고용이라 없다고 화면이 막히면 안 된다.
+ */
+export const useActivityRecommendations = (className: string | null) =>
+  useQuery({
+    queryKey: queryKeys.activityRecommendations(className),
+    queryFn: () => apiFn.fetchActivityRecommendations(className),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
   });
 
 /** 분류 중 사진이 있으면 2.2초 간격 폴링 — 진행감을 만든다 */
@@ -319,12 +335,20 @@ export const useRegenerateDraft = () => {
     mutationFn: ({
       type,
       childId,
+      topic,
     }: {
       type: DocType;
       childId: string | null;
-    }) => apiFn.fetchDocumentDraft(type, childId, true),
+      /** 계획안에서 교사가 정한 놀이 주제. 다른 문서는 쓰지 않는다. */
+      topic?: string;
+    }) => apiFn.generateDocumentDraft(type, childId, topic),
     onSuccess: (data, { type, childId }) => {
       qc.setQueryData(queryKeys.documentDraft(type, childId), data);
+      // 알림장 대기열의 "생성 전/검토 대기" 표시는 초안 존재 여부에서 나온다.
+      // 새로 만들었으면 그 목록도 다시 읽어야 칩이 바뀐다.
+      if (type === "notice") {
+        qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
+      }
     },
   });
 };
@@ -415,8 +439,8 @@ export const useSendPhotos = () => {
 export const useUpdateObservationTag = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, tag }: { id: string; tag: DevelopmentDomain | null }) =>
-      apiFn.updateObservationTag(id, tag),
+    mutationFn: ({ id, tags }: { id: string; tags: DevelopmentDomain[] }) =>
+      apiFn.updateObservationTag(id, tags),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["observations"] });
       qc.invalidateQueries({ queryKey: queryKeys.metrics });
@@ -429,13 +453,13 @@ export const useAddObservation = () => {
   return useMutation({
     mutationFn: ({
       childId,
-      tag,
+      tags,
       memo,
     }: {
       childId: string;
-      tag: DevelopmentDomain | null;
+      tags: DevelopmentDomain[];
       memo: string;
-    }) => apiFn.addObservation(childId, tag, memo),
+    }) => apiFn.addObservation(childId, tags, memo),
     onSuccess: () => {
       // 관찰이 늘면 발달평가서 원료·태깅률·체크리스트가 함께 움직인다
       qc.invalidateQueries({ queryKey: ["observations"] });

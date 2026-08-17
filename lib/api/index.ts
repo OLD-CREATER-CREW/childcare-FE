@@ -44,7 +44,13 @@ import type {
   SpecUser,
   SpecUserAccount,
 } from "@/lib/api/spec";
-import { TODAY } from "@/lib/constants";
+import {
+  MONTH_FROM,
+  MONTH_TO,
+  TODAY,
+  WEEK_FROM,
+  WEEK_TO,
+} from "@/lib/constants";
 import { DEV_DOMAINS } from "@/lib/types";
 import type {
   AppSettings,
@@ -64,6 +70,7 @@ import type {
   DocumentDraft,
   LoginInput,
   MetricsSummary,
+  ActivityRecommendations,
   NoticeQueue,
   ObservationData,
   ObservationEntry,
@@ -564,31 +571,73 @@ async function resolveDocumentId(
   return list.items[0]?.document_id ?? null;
 }
 
+/**
+ * 이미 있는 초안만 가져온다. 없으면 `null`.
+ *
+ * 예전에는 이 함수가 "없으면 만든다"까지 했다. 그래서 화면을 열기만 해도 LLM이
+ * 돌았다 — 교사가 보육일지 화면을 눌러 본 것만으로 초안이 생기고 토큰이 나갔고,
+ * 뒤로 갔다 다시 오면 또 생성됐다. 생성은 사람이 버튼을 눌러야 일어난다
+ * (불변 원칙: AI는 초안까지, 시작과 확정은 사람이).
+ */
 export const fetchDocumentDraft = async (
   type: DocType,
   childId: string | null,
-  regenerate = false,
+): Promise<DocumentDraft | null> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null) return null;
+  return mapDoc(await api.get<SpecDocument>(`/documents/${id}`));
+};
+
+/** 초안을 새로 만든다(EP-010). 「초안 만들기」·「다시 생성」이 부른다. */
+export const generateDocumentDraft = async (
+  type: DocType,
+  childId: string | null,
+  topic?: string,
 ): Promise<DocumentDraft> => {
-  if (!regenerate) {
-    const id = await resolveDocumentId(type, childId);
-    if (id != null) {
-      return mapDoc(await api.get<SpecDocument>(`/documents/${id}`));
-    }
-  }
   const body: {
     type: SpecDocType;
     child_id?: number;
     date?: string;
     period_from?: string;
     period_to?: string;
+    topic?: string;
   } = { type: docTypeToSpec(type) };
   if (childId) body.child_id = childIdToInt(childId);
   if (type === "notice" || type === "journal") body.date = TODAY;
   if (type === "plan") {
-    body.period_from = "2026-07-13";
-    body.period_to = "2026-07-17";
+    body.period_from = WEEK_FROM;
+    body.period_to = WEEK_TO;
   }
+  if (type === "plan_monthly") {
+    body.period_from = MONTH_FROM;
+    body.period_to = MONTH_TO;
+  }
+  // 교사가 정한 놀이 주제. 빈 문자열은 보내지 않는다 — 서버는 값이 없을 때만
+  // 기록에서 주제를 뽑는데, 빈 문자열을 보내면 "주제를 줬다"로 읽힌다.
+  const trimmed = topic?.trim();
+  if (trimmed) body.topic = trimmed;
   return mapDoc(await api.post<SpecDocument>("/documents/generate", body));
+};
+
+/** EP-027 활동 추천. 서버가 실패해도 빈 목록으로 답한다. */
+export const fetchActivityRecommendations = async (
+  className: string | null,
+): Promise<ActivityRecommendations> => {
+  const params = className
+    ? `?class_name=${encodeURIComponent(className)}`
+    : "";
+  const res = await api.get<{
+    items: { title: string; domain: string; reason: string }[];
+    total: number;
+    season?: string | null;
+    age_label?: string | null;
+  }>(`/activities/recommend${params}`);
+  return {
+    items: res.items ?? [],
+    total: res.total ?? 0,
+    season: res.season ?? null,
+    ageLabel: res.age_label ?? null,
+  };
 };
 
 export const fetchNoticeQueue = async (): Promise<NoticeQueue> => {
@@ -604,16 +653,20 @@ export const fetchNoticeQueue = async (): Promise<NoticeQueue> => {
   const withRecord = children.filter((c) =>
     recordedIds.has(childIdToInt(c.id)),
   );
+  // 초안이 없는 아이는 status를 null로 둔다. 예전에는 "draft"로 채워서, 아직
+  // 아무것도 만들지 않았는데도 목록에 "검토 대기"로 떴다.
   const queue = withRecord.map((c) => ({
     childId: c.id,
     name: c.name,
     color: c.color,
-    status: statusByChild.get(childIdToInt(c.id)) ?? ("draft" as DocStatus),
+    status: statusByChild.get(childIdToInt(c.id)) ?? null,
   }));
   return {
-    generated: queue.length,
+    generated: queue.filter((q) => q.status !== null).length,
+    ready: queue.length,
     total: children.length,
-    confirmed: queue.filter((q) => q.status !== "draft").length,
+    confirmed: queue.filter((q) => q.status === "confirmed" || q.status === "sent")
+      .length,
     sent: queue.filter((q) => q.status === "sent").length,
     queue,
     excluded: children
@@ -752,16 +805,24 @@ export const fetchObservations = async (
   };
 };
 
+/**
+ * 관찰 메모의 발달영역 태그를 바꾼다(EP-009).
+ *
+ * 태그는 **여러 개**일 수 있다 — 하나의 놀이가 여러 영역에 걸치는 게 오히려
+ * 보통이다(블록 길 위를 걸으며 리듬에 맞춰 몸을 움직이면 신체운동이자
+ * 예술경험이다). 와이어와 DB는 처음부터 배열이었는데 화면만 하나로 좁혀
+ * 있었다.
+ */
 export const updateObservationTag = async (
   id: string,
-  tag: DevelopmentDomain | null,
+  tags: DevelopmentDomain[],
 ): Promise<ObservationEntry> => {
   const res = await api.put<{
     record_id: number;
     dev_domain_tags: SpecDomain[];
     tags_edited: boolean;
   }>(`/records/${recordIdToInt(id)}/tags`, {
-    dev_domain_tags: tag ? [domainToSpec(tag)] : [],
+    dev_domain_tags: tags.map(domainToSpec),
   });
   // UI는 이 반환값을 쓰지 않고 관찰 쿼리를 무효화한다(childId/date/memo는 재조회로 채워짐).
   return {
@@ -785,10 +846,10 @@ export const updateObservationTag = async (
 // 날짜의 기존 기록을 조회해 병합한 뒤 전체 레코드를 보낸다(데이터 손실 방지).
 export const addObservation = async (
   childId: string,
-  tag: DevelopmentDomain | null,
+  tags: DevelopmentDomain[],
   memo: string,
 ): Promise<ObservationEntry> => {
-  const specTag = tag ? domainToSpec(tag) : null;
+  const specTags = tags.map(domainToSpec);
   const cid = childIdToInt(childId);
   const existing = (
     await api.get<ListEnvelope<SpecRecord>>(
@@ -803,25 +864,29 @@ export const addObservation = async (
     meal: existing?.meal ?? "",
     nap: existing?.nap ?? "",
     note: memo,
-    dev_domain_tags: specTag ? [specTag] : (existing?.dev_domain_tags ?? []),
+    dev_domain_tags: specTags.length
+      ? specTags
+      : (existing?.dev_domain_tags ?? []),
   });
-  let tags: SpecDomain[] = rec.dev_domain_tags ?? [];
+  let savedTags: SpecDomain[] = rec.dev_domain_tags ?? [];
   let edited = rec.tags_edited ?? false;
-  if (specTag) {
+  if (specTags.length) {
+    // 저장 직후 한 번 더 PUT하는 이유: 태그를 **수동으로 박제**하려면
+    // tags_edited를 세워야 하고, 그건 태그 전용 엔드포인트만 한다.
     const upd = await api.put<{
       record_id: number;
       dev_domain_tags: SpecDomain[];
       tags_edited: boolean;
-    }>(`/records/${rec.record_id}/tags`, { dev_domain_tags: [specTag] });
-    tags = upd.dev_domain_tags;
+    }>(`/records/${rec.record_id}/tags`, { dev_domain_tags: specTags });
+    savedTags = upd.dev_domain_tags;
     edited = upd.tags_edited;
   }
   return {
     id: intToRecordId(rec.record_id),
     childId,
     date: rec.date,
-    tag: domainFromSpec(tags[0]),
-    tags: domainsFromSpec(tags),
+    tag: domainFromSpec(savedTags[0]),
+    tags: domainsFromSpec(savedTags),
     manualTag: edited,
     memo: rec.note ?? memo,
   };

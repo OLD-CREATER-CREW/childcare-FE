@@ -54,6 +54,7 @@ const DOCTYPE_TO_SPEC: Record<DocType, SpecDocType> = {
   notice: "notice",
   journal: "journal",
   plan: "weekly_plan",
+  plan_monthly: "monthly_plan",
   evaluation: "dev_eval",
 };
 
@@ -61,7 +62,7 @@ const DOCTYPE_FROM_SPEC: Record<SpecDocType, DocType> = {
   notice: "notice",
   journal: "journal",
   weekly_plan: "plan",
-  monthly_plan: "plan",
+  monthly_plan: "plan_monthly",
   dev_eval: "evaluation",
 };
 
@@ -363,7 +364,20 @@ export function encodeRecordToSpec(input: DailyRecordInput): RecordWireFields {
   };
 }
 
-/** 명세 record 문자열 → UI 구조 필드. 규칙에 안 맞으면 안전한 기본값으로 복원. */
+/**
+ * 명세 record 문자열 → UI 구조 필드.
+ *
+ * ⚠️ 형식이 안 맞을 때가 있다. 이 앱의 입력 폼을 거치지 않은 기록(시드·음성
+ * 입력·다른 클라이언트)은 `"점심 보통, 국은 남김"`처럼 자유 문장으로 들어온다.
+ *
+ * 예전에는 그럴 때 조용히 `다 먹음 / 12:40~14:00 / 잘 잤어요`로 **채워 넣었다.**
+ * 화면에는 그 가짜 값이 뜨는데 LLM은 진짜 문자열을 받으므로, 교사가 "기록이랑
+ * 알림장이 다르다"고 느끼게 된다. 실제로 그 신고가 들어왔다. 아이가 무엇을
+ * 먹고 얼마나 잤는지를 앱이 지어내는 것은 그 자체로 위험하다.
+ *
+ * 그래서 원문(`rawMeal`·`rawNap`)과 **파싱 성공 여부**를 함께 돌려준다.
+ * 보여 주는 쪽은 파싱에 실패했으면 원문을 그대로 보여야 한다.
+ */
 export function decodeSpecRecord(spec: Partial<RecordWireFields>): {
   activities: string[];
   lunch: MealAmount;
@@ -372,13 +386,19 @@ export function decodeSpecRecord(spec: Partial<RecordWireFields>): {
   napTo: string;
   napQuality: NapQuality;
   memo: string;
+  rawMeal: string;
+  rawNap: string;
+  mealParsed: boolean;
+  napParsed: boolean;
 } {
   const activities = (spec.activity ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
   const meal = /점심:\s*(.+?)\s*\/\s*간식:\s*(.+)/.exec(spec.meal ?? "");
-  const nap = /(\d{2}:\d{2})~(\d{2}:\d{2})\s*\((.+)\)/.exec(spec.nap ?? "");
+  const nap = /(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})\s*\((.+)\)/.exec(
+    spec.nap ?? "",
+  );
   return {
     activities,
     lunch: (meal?.[1]?.trim() ?? "다 먹음") as MealAmount,
@@ -387,6 +407,10 @@ export function decodeSpecRecord(spec: Partial<RecordWireFields>): {
     napTo: nap?.[2] ?? "14:00",
     napQuality: (nap?.[3]?.trim() ?? "잘 잤어요") as NapQuality,
     memo: spec.note ?? "",
+    rawMeal: spec.meal ?? "",
+    rawNap: spec.nap ?? "",
+    mealParsed: meal !== null,
+    napParsed: nap !== null,
   };
 }
 
