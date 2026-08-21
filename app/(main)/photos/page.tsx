@@ -1,324 +1,246 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { Camera, Loader2, Send, UserRoundPlus } from "lucide-react";
-import { useApp } from "@/lib/store";
-import { ApiError } from "@/lib/api/client";
+/**
+ * SCR-005 사진함 (FN-006) — 얼굴 등록과 사진 분류를 한 화면에 모은다.
+ *
+ * ■ 왜 한 화면인가
+ * 둘은 같은 **반 갤러리** 하나를 공유한다. 등록이 갤러리를 채우고 분류가 그것을
+ * 소비하므로, 화면이 갈리면 교사는 "왜 분류가 안 되지"를 다른 화면에서 찾아야 한다.
+ * 반 선택·갤러리 상태·서버 연결 경고를 여기서 한 번만 두고 두 탭이 나눠 쓴다.
+ *
+ * ■ 탭을 감출 뿐 언마운트하지 않는다
+ * 올린 사진과 분류 결과는 이 페이지의 메모리에만 있다. 탭을 옮길 때 언마운트하면
+ * 등록하러 갔다 온 사이 분류 결과가 통째로 날아간다.
+ *
+ * 담당: 손승현(ml)
+ */
+
+import { useEffect, useMemo, useState } from "react";
+import { Camera, ScanFace, ShieldAlert, UserRoundPlus } from "lucide-react";
+import { ApiError } from "@/lib/api";
+import { useChildRoster } from "@/lib/queries";
+import { faceHealth, galleryKey, useGallery } from "@/lib/face";
 import {
-  useAssignPhoto,
-  useChildren,
-  usePhotoInbox,
-  useSendPhotos,
-  useUploadPhotos,
-} from "@/lib/queries";
-import {
-  Avatar,
-  Modal,
   N,
   Notice,
   PageHead,
-  Progress,
   QueryError,
+  Select,
   Skeleton,
   SpecBar,
 } from "@/components/ui";
-import type { Photo } from "@/lib/types";
+import { ClassifyPanel } from "@/components/face/ClassifyPanel";
+import { EnrollPanel } from "@/components/face/EnrollPanel";
 
-function simLabel(p: Photo) {
-  if (p.status === "classifying") return "분류 중…";
-  if (p.status === "unmatched") return "미분류";
-  return p.similarity === null ? "수동 지정" : `${p.similarity}%`;
-}
+type Tab = "classify" | "enroll";
 
-// SCR-005 사진함 — 업로드 → 자동 분류(비동기) → 선택 발송 (FN-006)
 export default function PhotosPage() {
-  const { toast } = useApp();
-  const inboxQuery = usePhotoInbox();
-  const childrenQuery = useChildren();
-  const uploadMutation = useUploadPhotos();
-  const sendMutation = useSendPhotos();
-  const assignMutation = useAssignPhoto();
+  const rosterQuery = useChildRoster("enrolled");
+  const roster = useMemo(() => rosterQuery.data ?? [], [rosterQuery.data]);
 
-  const [sel, setSel] = useState<number[]>([]);
-  const [tab, setTab] = useState<string>("all");
-  const [assignTarget, setAssignTarget] = useState<Photo | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [tab, setTab] = useState<Tab>("classify");
+  const [className, setClassName] = useState("");
+  const [serverDown, setServerDown] = useState<string | null>(null);
 
-  const inbox = inboxQuery.data;
-  const kids = useMemo(() => childrenQuery.data ?? [], [childrenQuery.data]);
-  const childName = (id: string | null) =>
-    kids.find((c) => c.id === id)?.name ?? "";
+  const classNames = useMemo(
+    () =>
+      Array.from(
+        new Set(roster.map((c) => c.className ?? "").filter(Boolean)),
+      ).sort(),
+    [roster],
+  );
+  // 반이 비어 있는 아이는 갤러리 키를 만들 수 없어 목록에 넣지 않는다
+  const unassigned = roster.filter((c) => !c.className).length;
 
-  // 사진이 있는 아이만 탭으로
-  const childTabs = useMemo(() => {
-    if (!inbox) return [];
-    const ids = new Set(
-      inbox.photos.filter((p) => p.childId).map((p) => p.childId as string),
-    );
-    return kids.filter((c) => ids.has(c.id));
-  }, [inbox, kids]);
+  // 명단이 도착하면 첫 반을 고른다. 고른 반이 사라지면(퇴소 등) 다시 첫 반으로.
+  useEffect(() => {
+    if (classNames.length === 0) return;
+    if (!classNames.includes(className)) setClassName(classNames[0]);
+  }, [classNames, className]);
 
-  const visible = (inbox?.photos ?? []).filter((p) => {
-    if (tab === "all") return true;
-    if (tab === "unmatched") return p.status === "unmatched";
-    return p.childId === tab;
-  });
+  const classKey = className ? galleryKey(className) : null;
+  const gallery = useGallery(classKey);
 
-  const toggle = (p: Photo) => {
-    if (p.status === "unmatched") {
-      setAssignTarget(p);
-      return;
-    }
-    if (p.status === "classifying" || p.sent) return;
-    setSel((prev) =>
-      prev.includes(p.id) ? prev.filter((x) => x !== p.id) : [...prev, p.id],
-    );
-  };
+  const kids = useMemo(
+    () => roster.filter((c) => c.className === className),
+    [roster, className],
+  );
+  const enrolledCount = kids.filter((k) => gallery.isEnrolled(k.id)).length;
 
-  // EP-016은 multipart의 `files`가 필수다 — 파일을 고르지 않고 부르면 서버가
-  // VALIDATION_ERROR로 막으므로, 버튼은 파일 선택기를 여는 역할만 한다.
-  const upload = (files: File[]) => {
-    if (files.length === 0) return;
-    uploadMutation.mutate(files, {
-      onSuccess: ({ added }) =>
-        toast(`${added}장 업로드 — 배경에서 얼굴 분류를 시작합니다`),
-      onError: (e) =>
-        toast(
+  // 얼굴인식 서버가 떠 있는지 미리 확인한다 — 사진을 다 고른 뒤에 알게 되면 늦다
+  useEffect(() => {
+    let cancelled = false;
+    faceHealth()
+      .then((h) => {
+        if (!cancelled)
+          setServerDown(h.ok ? null : "모델이 아직 로드되지 않았습니다.");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setServerDown(
           e instanceof ApiError
             ? e.message
-            : "사진을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.",
-        ),
-    });
-  };
-
-  const sendSelected = () =>
-    sendMutation.mutate(sel, {
-      onSuccess: ({ sent }) => {
-        toast(`선택한 사진 ${sent}장을 발송했습니다`);
-        setSel([]);
-      },
-    });
-
-  const assign = (childId: string) => {
-    if (!assignTarget) return;
-    assignMutation.mutate(
-      { photoId: assignTarget.id, childId },
-      {
-        onSuccess: () => {
-          toast(`${childName(childId)}에게 배정했습니다 (matched_child_id)`);
-          setAssignTarget(null);
-        },
-      },
-    );
-  };
+            : "얼굴인식 서버에 연결할 수 없습니다.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
       <PageHead
         title="사진함"
-        sub="업로드 → 아이별 자동 분류(비동기) → 선택 발송"
+        sub={
+          tab === "classify"
+            ? "사진 올리기 → 아이별 자동 분류 → 선택 내보내기"
+            : "아이별 사진 3~5장 → 반 갤러리 (임베딩은 이 PC에만 저장됩니다)"
+        }
       />
       <SpecBar
         scr="SCR-005"
         fn={["FN-006"]}
         ep={[
-          "EP-016 업로드·재분류",
-          "EP-017 조회·폴링",
+          "POST /api/face/enroll",
+          "POST /api/face/classify",
           "EP-018 수동 지정",
-          "EP-019 발송",
+          "EP-019 내보내기",
         ]}
       />
 
       <div className="stack">
+        {serverDown && (
+          <Notice kind="warn">
+            ⚠{" "}
+            <span>
+              {serverDown} 개발 중이라면 백엔드 저장소에서{" "}
+              <code>uvicorn ml.server.app:app --reload</code> 로 서버를 띄우고,{" "}
+              <code>.env.local</code> 의{" "}
+              <code>NEXT_PUBLIC_FACE_API_BASE_URL</code> 을 확인하세요.
+            </span>
+          </Notice>
+        )}
+
+        {!gallery.persistent && (
+          <Notice kind="warn">
+            <ShieldAlert size={14} className="mr-1 inline" />
+            <span>
+              <b>이 환경에서는 갤러리가 저장되지 않습니다.</b> 새로고침하거나 앱을
+              닫으면 등록한 얼굴이 모두 사라집니다 — 데스크톱 앱에{" "}
+              <code>desktop.face</code> 채널을 붙이기 전까지는 시험용으로만
+              쓰세요.
+            </span>
+          </Notice>
+        )}
+
+        {gallery.error && (
+          <Notice kind="warn">
+            ⚠ <span>{gallery.error}</span>
+          </Notice>
+        )}
+
+        {/* ---------------- 반 · 갤러리 상태 · 탭 ---------------- */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                upload(Array.from(e.target.files ?? []));
-                // 같은 파일을 다시 골라도 change가 뜨도록 값을 비운다
-                e.target.value = "";
-              }}
-            />
-            <button
-              className="btn primary big"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadMutation.isPending}
-            >
-              <N n={1} />
-              <Camera size={16} />{" "}
-              {uploadMutation.isPending ? "업로드 중…" : "사진 올리기"}
-            </button>
-            <div className="min-w-[220px] flex-1">
-              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-bold">
-                <span className="inline-flex items-center gap-1.5">
-                  <N n={2} />
-                  {inbox
-                    ? `분류 ${inbox.classified}/${inbox.total}장`
-                    : "불러오는 중…"}
-                </span>
-                {(inbox?.classifying ?? 0) > 0 && (
-                  <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-amber">
-                    <Loader2 size={13} className="animate-spin" />
-                    {inbox?.classifying}장 분류 중
-                  </span>
-                )}
+          <div className="flex flex-wrap items-end gap-x-5 gap-y-4">
+            <div className="w-[170px]">
+              <div className="mb-2 text-[12.5px] font-bold text-muted">
+                <N n={1} /> 반
               </div>
-              <Progress
-                value={inbox?.classified ?? 0}
-                max={inbox?.total ?? 1}
-              />
+              {rosterQuery.isLoading ? (
+                <Skeleton lines={1} />
+              ) : rosterQuery.isError ? (
+                <QueryError onRetry={() => rosterQuery.refetch()} />
+              ) : (
+                <Select
+                  value={className}
+                  onChange={setClassName}
+                  options={classNames}
+                  ariaLabel="반 선택"
+                  placeholder="반 선택"
+                />
+              )}
+            </div>
+
+            <div className="flex-1 text-[13px]">
+              {gallery.loading ? (
+                <span className="text-muted">갤러리 불러오는 중…</span>
+              ) : (
+                <span className="text-muted">
+                  얼굴 등록 <b className="text-ink">{enrolledCount}</b> /{" "}
+                  {kids.length}명
+                  {gallery.size > 0 && (
+                    <>
+                      {" · "}요청당 약{" "}
+                      {Math.round((gallery.gallery?.approxBytes ?? 0) / 1024)}KB
+                      전송
+                    </>
+                  )}
+                  {gallery.saving && " · 저장 중…"}
+                </span>
+              )}
+            </div>
+
+            <div className="seg">
+              <button
+                className={tab === "classify" ? "on" : ""}
+                onClick={() => setTab("classify")}
+              >
+                <Camera size={14} className="mr-1.5 inline" />
+                사진 분류
+              </button>
+              <button
+                className={tab === "enroll" ? "on" : ""}
+                onClick={() => setTab("enroll")}
+              >
+                <ScanFace size={14} className="mr-1.5 inline" />
+                얼굴 등록
+              </button>
             </div>
           </div>
-          <div className="mt-4">
-            <Notice kind="soft">
-              분류는 비동기로 진행됩니다 — 화면을 떠나도 계속되고, 10분 넘게
-              멈춘 사진은 사진함을 열 때 자동으로 다시 분류됩니다.
-            </Notice>
-          </div>
-        </div>
 
-        <div className="card">
-          <div className="phototabs">
-            <button
-              className={`chip ${tab === "all" ? "on" : ""}`}
-              onClick={() => setTab("all")}
-            >
-              전체 {inbox ? `(${inbox.total})` : ""}
-            </button>
-            {childTabs.map((c) => (
-              <button
-                key={c.id}
-                className={`chip ${tab === c.id ? "on" : ""}`}
-                onClick={() => setTab(c.id)}
-              >
-                <Avatar name={c.name} color={c.color} size="sm" />
-                {c.name}
-              </button>
-            ))}
-            {(inbox?.unmatched ?? 0) > 0 && (
-              <button
-                className={`chip ${tab === "unmatched" ? "on" : ""} border-[#e9c4bd] text-coral`}
-                onClick={() => setTab("unmatched")}
-              >
-                ⚠ 미분류 ({inbox?.unmatched})
-              </button>
-            )}
-          </div>
-
-          {inboxQuery.isLoading || !inbox ? (
-            <Skeleton lines={4} />
-          ) : inboxQuery.isError ? (
-            <QueryError onRetry={() => inboxQuery.refetch()} />
-          ) : (
-            <div className="photogrid">
-              <AnimatePresence initial={false}>
-                {visible.map((p) => (
-                  <motion.button
-                    key={p.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.92 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.92 }}
-                    transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-                    className={`photo ${sel.includes(p.id) ? "sel" : ""} ${
-                      p.status === "unmatched" ? "border-dashed" : ""
-                    } ${p.sent ? "dim" : ""}`}
-                    onClick={() => toggle(p)}
-                    aria-label={`사진 ${p.id} — ${simLabel(p)}`}
+          {!gallery.loading && gallery.size === 0 && (
+            <div className="mt-4">
+              <Notice kind="warn">
+                ⚠{" "}
+                <span>
+                  이 반에 등록된 얼굴이 없어 분류할 수 없습니다 —{" "}
+                  <button
+                    className="font-bold underline"
+                    onClick={() => setTab("enroll")}
                   >
-                    <span className="icon">{p.icon}</span>
-                    {p.status === "classified" && !p.sent && (
-                      <span className="ck">
-                        {sel.includes(p.id) ? "✓" : ""}
-                      </span>
-                    )}
-                    {p.sent && (
-                      <span className="absolute right-2 top-2 rounded-md bg-confirm-soft px-1.5 py-0.5 text-[10.5px] font-bold text-confirm">
-                        발송됨
-                      </span>
-                    )}
-                    <span className="sim">
-                      <span>
-                        {p.status === "classifying" && (
-                          <Loader2
-                            size={11}
-                            className="mr-1 inline animate-spin"
-                          />
-                        )}
-                        {simLabel(p)}
-                      </span>
-                      <span>{childName(p.childId)}</span>
-                    </span>
-                  </motion.button>
-                ))}
-              </AnimatePresence>
+                    얼굴 등록
+                  </button>
+                  부터 해주세요.
+                </span>
+              </Notice>
             </div>
           )}
 
-          <div className="mt-4">
-            <Notice kind="warn">
-              ⚠{" "}
-              <span>
-                얼굴 임베딩은 생체인식정보(민감정보)입니다. 연습용 사진만
-                올리세요.
-              </span>
-            </Notice>
-          </div>
-          <div className="btnrow">
-            <button
-              className="btn primary"
-              onClick={sendSelected}
-              disabled={sendMutation.isPending || sel.length === 0}
-            >
-              <N n={5} />
-              <Send size={14} />
-              {sendMutation.isPending
-                ? "발송 중…"
-                : `선택한 사진 발송${sel.length ? ` (${sel.length})` : ""}`}
-            </button>
-            <span className="text-[12.5px] text-muted">
-              <N n={6} />
-              미분류 사진을 누르면 아이를 직접 배정할 수 있어요
-            </span>
-          </div>
+          {unassigned > 0 && (
+            <div className="mt-2">
+              <Notice kind="soft">
+                <span>
+                  반이 지정되지 않은 아이 {unassigned}명은 여기 보이지 않습니다 —
+                  갤러리를 반 단위로 나누기 때문입니다. 아동 관리에서 반을 지정해
+                  주세요.
+                </span>
+              </Notice>
+            </div>
+          )}
+        </div>
+
+        {/*
+          탭은 감추기만 한다 — 언마운트하면 올린 사진과 분류 결과가 날아간다.
+          두 패널이 같은 gallery 인스턴스를 받으므로 등록 즉시 분류 쪽에 반영된다.
+        */}
+        <div hidden={tab !== "classify"}>
+          <ClassifyPanel kids={kids} gallery={gallery} />
+        </div>
+        <div hidden={tab !== "enroll"}>
+          <EnrollPanel kids={kids} gallery={gallery} />
         </div>
       </div>
-
-      <Modal
-        open={assignTarget !== null}
-        label="아이 수동 지정"
-        onClose={() => setAssignTarget(null)}
-        wide
-      >
-        <h3>
-          <UserRoundPlus size={16} className="mr-1 inline" />
-          아이 수동 지정
-        </h3>
-        <div className="desc">
-          유사도가 낮아 자동 분류되지 못한 사진입니다. 아이를 선택하면{" "}
-          <b>matched_child_id</b>로 저장되고, 이후 자동 분류가 덮어쓰지
-          않습니다.
-        </div>
-        <div className="mt-4 grid max-h-[300px] gap-1.5 overflow-y-auto [grid-template-columns:repeat(auto-fill,minmax(120px,1fr))]">
-          {kids.map((c) => (
-            <button
-              key={c.id}
-              className="rail-item border border-line"
-              onClick={() => assign(c.id)}
-              disabled={assignMutation.isPending}
-            >
-              <Avatar name={c.name} color={c.color} size="sm" />
-              {c.name}
-            </button>
-          ))}
-        </div>
-      </Modal>
     </>
   );
 }
