@@ -15,7 +15,14 @@
  *
  * ■ 사진은 이 PC에만 있다
  * 서버는 추론 후 사진을 폐기하고 아무것도 저장하지 않는다. 학부모 공유는 교사가
- * 키즈노트에 직접 올리므로, 마지막 단계는 발송이 아니라 아이별 폴더로 내보내기다.
+ * 키즈노트에 직접 올리므로, 마지막 단계는 발송이 아니라 폴더로 내보내기다.
+ *
+ * ■ 내보내기 구조: 아이 이름 / 촬영일자
+ *     손승현/2010-05-16/IMG_0421.jpg
+ *     손승현/2011-06-20/IMG_0899.jpg
+ * 아이 폴더 하나에 1년치가 쌓이면 특정 행사 사진을 찾을 수 없다. 촬영일자로 나누면
+ * 그대로 행사 단위가 된다. 날짜는 EXIF DateTimeOriginal 에서 읽고, 없으면(메신저를
+ * 거친 사진 등) 내보내기 전에 교사에게 물어본다 — 파일 수정시각으로 추측하지 않는다.
  *
  * 담당: 손승현(ml)
  */
@@ -23,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  CalendarDays,
   Camera,
   CircleSlash,
   FolderDown,
@@ -32,7 +40,7 @@ import {
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useApp } from "@/lib/store";
-import { classifyPhoto } from "@/lib/face";
+import { classifyPhoto, formatDate, readPhotoDate } from "@/lib/face";
 import type { EmbeddingB64, UseGalleryResult } from "@/lib/face";
 import type { Child } from "@/lib/types";
 import {
@@ -69,6 +77,10 @@ type Shot = {
   unmatchedCount: number;
   error?: string;
   exported?: boolean;
+  /** 촬영일자 "YYYY-MM-DD". EXIF에서 못 읽으면 null — 내보낼 때 교사가 지정한다 */
+  date: string | null;
+  /** 날짜 출처. exif = 사진에 박힌 값, manual = 교사가 입력한 값 */
+  dateSource: "exif" | "manual" | null;
 };
 
 /**
@@ -123,6 +135,10 @@ export function ClassifyPanel({
   const [assignTarget, setAssignTarget] = useState<Shot | null>(null);
   const [assignSel, setAssignSel] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
+  /** 촬영일자를 못 읽어 교사 입력이 필요한 사진들 */
+  const [dateDialog, setDateDialog] = useState<Shot[] | null>(null);
+  const [dateInputs, setDateInputs] = useState<Record<string, string>>({});
+  const [bulkDate, setBulkDate] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
 
@@ -233,12 +249,22 @@ export function ClassifyPanel({
         similarity: {},
         facesDetected: 0,
         unmatchedCount: 0,
+        date: null,
+        dateSource: null,
       });
     });
     if (fresh.length === 0) return;
 
     setShots((prev) => prev.concat(fresh));
     toast(`${fresh.length}장 올렸습니다 — 얼굴 분류를 시작합니다`);
+
+    // 촬영일자는 얼굴 분류와 무관하므로 병렬로 읽는다(파일 앞 256KB만 본다)
+    fresh.forEach((s) => {
+      void readPhotoDate(s.file).then((date) => {
+        if (date) patch(s.id, { date, dateSource: "exif" });
+      });
+    });
+
     void classifyQueue(fresh);
   };
 
@@ -324,8 +350,13 @@ export function ClassifyPanel({
     );
   };
 
-  /** EP-019 대체 — 아이 이름 폴더를 만들어 원본 사진을 복사한다 */
-  const exportSelected = async () => {
+  /**
+   * EP-019 대체 — `아이 이름/촬영일자/파일명` 으로 원본 사진을 복사한다.
+   *
+   * 날짜 폴더를 한 겹 더 두는 이유: 아이 폴더 하나에 1년치가 쌓이면 교사가 특정
+   * 행사 사진을 찾을 수 없다. 촬영일자로 나누면 그대로 행사 단위가 된다.
+   */
+  const runExport = async (targets: Shot[]) => {
     const picker = (window as PickerWindow).showDirectoryPicker;
     if (!picker) {
       toast(
@@ -333,7 +364,6 @@ export function ClassifyPanel({
       );
       return;
     }
-    const targets = shots.filter((s) => sel.includes(s.id));
     if (targets.length === 0) return;
 
     let root: DirHandle;
@@ -345,16 +375,23 @@ export function ClassifyPanel({
 
     setExporting(true);
     const used = new Map<string, Set<string>>();
+    const doneIds: string[] = [];
     let written = 0;
     try {
       for (const shot of targets) {
         const folders = shot.childIds.length > 0 ? shot.childIds : ["미분류"];
+        const day = safeName(shot.date ?? "날짜미상");
+
         for (const key of folders) {
           const folder = safeName(key === "미분류" ? "미분류" : childName(key));
-          const dir = await root.getDirectoryHandle(folder, { create: true });
+          const childDir = await root.getDirectoryHandle(folder, {
+            create: true,
+          });
+          const dir = await childDir.getDirectoryHandle(day, { create: true });
 
           // 같은 폴더에 같은 파일명이 겹치면 뒤엣것이 앞엣것을 지운다 — 번호를 붙인다
-          const taken = used.get(folder) ?? new Set<string>();
+          const bucket = `${folder}/${day}`;
+          const taken = used.get(bucket) ?? new Set<string>();
           let name = safeName(shot.file.name);
           if (taken.has(name)) {
             const dot = name.lastIndexOf(".");
@@ -365,7 +402,7 @@ export function ClassifyPanel({
             name = `${stem}_${i}${ext}`;
           }
           taken.add(name);
-          used.set(folder, taken);
+          used.set(bucket, taken);
 
           const handle = await dir.getFileHandle(name, { create: true });
           const writable = await handle.createWritable();
@@ -373,17 +410,70 @@ export function ClassifyPanel({
           await writable.close();
           written += 1;
         }
+        doneIds.push(shot.id);
       }
       setShots((prev) =>
-        prev.map((s) => (sel.includes(s.id) ? { ...s, exported: true } : s)),
+        prev.map((s) =>
+          doneIds.indexOf(s.id) >= 0 ? { ...s, exported: true } : s,
+        ),
       );
       setSel([]);
-      toast(`${written}개 파일을 아이별 폴더로 내보냈습니다`);
+      toast(
+        `${written}개 파일을 아이별 · 날짜별 폴더로 내보냈습니다 (${used.size}개 폴더)`,
+      );
     } catch {
       toast("내보내기에 실패했습니다. 폴더 쓰기 권한을 확인하세요.");
     } finally {
       setExporting(false);
     }
+  };
+
+  /** 날짜가 빠진 사진이 있으면 먼저 물어보고, 다 채워졌으면 바로 내보낸다 */
+  const exportSelected = () => {
+    const targets = shots.filter((s) => sel.indexOf(s.id) >= 0);
+    if (targets.length === 0) return;
+
+    const undated = targets.filter((s) => !s.date);
+    if (undated.length > 0) {
+      const inputs: Record<string, string> = {};
+      undated.forEach((s) => {
+        inputs[s.id] = "";
+      });
+      setDateInputs(inputs);
+      setBulkDate("");
+      setDateDialog(undated);
+      return;
+    }
+    void runExport(targets);
+  };
+
+  /** 날짜 입력 모달 확인 — 채운 날짜를 반영하고 이어서 내보낸다 */
+  const confirmDates = () => {
+    if (!dateDialog) return;
+    const missing = dateDialog.filter((s) => !dateInputs[s.id]);
+    if (missing.length > 0) {
+      toast(`날짜를 입력하지 않은 사진이 ${missing.length}장 있습니다`);
+      return;
+    }
+
+    const filled: Record<string, string> = {};
+    dateDialog.forEach((s) => {
+      filled[s.id] = dateInputs[s.id];
+    });
+
+    setShots((prev) =>
+      prev.map((s) =>
+        filled[s.id]
+          ? { ...s, date: filled[s.id], dateSource: "manual" as const }
+          : s,
+      ),
+    );
+    setDateDialog(null);
+
+    const targets = shots
+      .filter((s) => sel.indexOf(s.id) >= 0)
+      .map((s) => (filled[s.id] ? { ...s, date: filled[s.id] } : s));
+    void runExport(targets);
   };
 
   // ---------- 집계 ----------
@@ -447,6 +537,9 @@ export function ClassifyPanel({
       .join(", ");
     const parts = [
       `${s.file.name}`,
+      s.date
+        ? `${formatDate(s.date)}${s.dateSource === "manual" ? " (직접 입력)" : ""}`
+        : "촬영일자 없음",
       `얼굴 ${s.facesDetected}개 검출`,
       `배정 ${s.childIds.length}명${names ? ` (${names})` : ""}`,
     ];
@@ -663,6 +756,12 @@ export function ClassifyPanel({
                       붙여서 행 단위로 쌓는다.
                     */}
                     <span className="sim flex-col items-stretch justify-end gap-0.5">
+                      {(s.status === "classified" ||
+                        s.status === "unmatched") && (
+                        <span className="text-[10px] leading-tight opacity-80">
+                          {s.date ? s.date : "날짜 없음"}
+                        </span>
+                      )}
                       {s.childIds.length > 0 ? (
                         s.childIds.map((id) => {
                           const score = s.similarity[id];
@@ -717,12 +816,96 @@ export function ClassifyPanel({
             </button>
             <span className="text-[12.5px] text-muted">
               <N n={5} />
-              미분류 사진을 누르면 아이를 직접 지정할 수 있어요 · 아이 이름 폴더로
-              저장됩니다
+              미분류 사진을 누르면 아이를 직접 지정할 수 있어요 ·{" "}
+              <b>아이 이름 / 촬영일자</b> 폴더로 저장됩니다
             </span>
           </div>
         </div>
       </div>
+
+      <Modal
+        open={dateDialog !== null}
+        label="촬영 날짜 입력"
+        onClose={() => setDateDialog(null)}
+        wide
+      >
+        <h3>
+          <CalendarDays size={16} className="mr-1 inline" />
+          촬영 날짜를 입력해 주세요
+        </h3>
+        <div className="desc">
+          사진 {dateDialog?.length ?? 0}장에서 촬영일시를 읽지 못했습니다 —
+          메신저로 받은 사진은 EXIF 정보가 지워져 옵니다. 날짜는{" "}
+          <b>아이 이름 폴더 안의 하위 폴더 이름</b>이 됩니다.
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-line-strong bg-paper px-3 py-2.5">
+          <span className="text-[12.5px] font-bold text-muted">
+            전체 같은 날짜로
+          </span>
+          <input
+            type="date"
+            className="input w-auto py-1.5"
+            value={bulkDate}
+            onChange={(e) => setBulkDate(e.target.value)}
+          />
+          <button
+            className="btn px-3 py-1.5 text-[12.5px]"
+            disabled={!bulkDate}
+            onClick={() => {
+              if (!bulkDate || !dateDialog) return;
+              const next: Record<string, string> = {};
+              dateDialog.forEach((s) => {
+                next[s.id] = bulkDate;
+              });
+              setDateInputs(next);
+            }}
+          >
+            일괄 적용
+          </button>
+        </div>
+
+        <div className="mt-3 flex max-h-[280px] flex-col gap-2 overflow-y-auto">
+          {(dateDialog ?? []).map((s) => (
+            <div key={s.id} className="flex items-center gap-2.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={s.url}
+                alt={s.file.name}
+                className="h-11 w-11 flex-none rounded-lg object-cover"
+              />
+              <span className="min-w-0 flex-1 truncate text-[12.5px]">
+                {s.file.name}
+                <span className="block text-[11.5px] text-muted">
+                  {s.childIds.length > 0
+                    ? s.childIds.map((id) => childName(id)).join(", ")
+                    : "미분류"}
+                </span>
+              </span>
+              <input
+                type="date"
+                className="input w-auto flex-none py-1.5"
+                value={dateInputs[s.id] ?? ""}
+                onChange={(e) =>
+                  setDateInputs((prev) => ({
+                    ...prev,
+                    [s.id]: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="btn ghost" onClick={() => setDateDialog(null)}>
+            취소
+          </button>
+          <button className="btn primary" onClick={confirmDates}>
+            날짜 저장하고 내보내기
+          </button>
+        </div>
+      </Modal>
 
       <Modal
         open={assignTarget !== null}
