@@ -24,5 +24,6 @@ export {
   hasDesktopFaceBridge,
 } from "./gallery";
 export type { DesktopFaceBridge, GalleryStore } from "./gallery";
+export { formatDate, readPhotoDate } from "./exif";
 export { galleryKey, resetGalleryCache, useGallery } from "./useGallery";
 export type { UseGalleryResult } from "./useGallery";
