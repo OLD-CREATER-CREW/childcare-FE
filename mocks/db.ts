@@ -194,6 +194,45 @@ const CHILD_SEEDS: ChildSeed[] = [
     recorded: true,
     attending: true,
   },
+  // ---- 얼굴인식 테스트용 (팀원 이름) ----
+  // 실제 사진으로 등록·분류를 눌러보려면 갤러리에 넣을 대상이 명단에 있어야 한다.
+  // 목 데이터 전용이며 서버 명단(EP-039)에는 없다.
+  {
+    id: "c16",
+    name: "손승민",
+    birthDate: "2022-04-05",
+    gender: "남",
+    guardian: "테스트 보호자",
+    recorded: false,
+    attending: true,
+  },
+  {
+    id: "c17",
+    name: "공기훈",
+    birthDate: "2022-06-18",
+    gender: "남",
+    guardian: "테스트 보호자",
+    recorded: false,
+    attending: true,
+  },
+  {
+    id: "c18",
+    name: "손승현",
+    birthDate: "2022-09-27",
+    gender: "남",
+    guardian: "테스트 보호자",
+    recorded: false,
+    attending: true,
+  },
+  {
+    id: "c19",
+    name: "성준서",
+    birthDate: "2022-11-11",
+    gender: "남",
+    guardian: "테스트 보호자",
+    recorded: false,
+    attending: true,
+  },
 ];
 
 const DEFAULT_ACTIVITIES = ["바깥놀이", "블록쌓기"];
