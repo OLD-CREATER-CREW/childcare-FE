@@ -95,7 +95,7 @@ await store.save(classId, gallery.toEntries());
 
 ---
 
-## 갤러리 저장 — 지금은 휘발이다
+## 갤러리 저장
 
 ```ts
 import { createGalleryStore } from "@/lib/face";
@@ -107,8 +107,8 @@ if (!store.persistent) {
 ```
 
 `createGalleryStore()`는 Electron에 `face` 채널이 있으면 암호화 저장소를, 없으면
-메모리 저장소를 준다. **현재 `electron/preload.js`에는 `templates` 채널만 있어서
-항상 메모리(휘발)로 동작한다.**
+메모리 저장소를 준다. **데스크톱 앱(`npm run electron:dev`)에서는 암호화 저장이
+동작하고, 브라우저(`npm run dev`)에서는 메모리라 새로고침하면 사라진다.**
 
 ### 지켜야 할 것
 
@@ -118,13 +118,21 @@ if (!store.persistent) {
 - 갤러리는 **반 단위**로 유지할 것. 원 전체를 한 갤러리에 넣으면 오배정이 급증한다
   (실측: 15명 오배정 0% → 100명 1.46%)
 
-### 실제 저장을 붙이려면
+### 저장이 실제로 일어나는 곳
 
-`electron/main.js` + `preload.js`에 `desktop.face` 채널을 추가해야 한다.
-필요한 시그니처는 `gallery.ts`의 `DesktopFaceBridge` 타입에 정의해뒀다.
+| | |
+|---|---|
+| 파일 | `userData/galleries/<반>-<해시>.enc` |
+| 암호화 | AES-256-GCM (`electron/gallery-crypto.js`) |
+| 키 | 32바이트 랜덤 → `safeStorage`로 OS 키체인 (Windows DPAPI / macOS Keychain) |
+| 백업 | 교사 암호를 scrypt로 유도 — 다른 PC에서 열려야 하므로 키체인 키를 쓰지 않는다 |
 
-암·복호화는 백엔드 저장소의 `ml/pipeline/crypto.py`(AES-256-GCM)가 담당하고,
-키는 `safeStorage`로 OS 키체인에 보관한다. 상세 규약은 `INTERFACE.md` 7-2절.
+`gallery-crypto.js`는 백엔드의 `ml/pipeline/crypto.py`와 **같은 파일 포맷**이라
+양쪽이 서로의 파일을 읽는다(양방향 확인 완료). 두 파일의 상수가 어긋나면 즉시
+호환이 깨지므로 한쪽을 고치면 반드시 같이 고칠 것. 상세 규약은 `INTERFACE.md` 7절.
+
+`safeStorage`를 쓸 수 없는 환경에서는 **저장하지 않고 실패한다.** 키와 데이터가 같은
+곳에 평문으로 있으면 암호화의 의미가 없기 때문이다.
 
 ---
 
