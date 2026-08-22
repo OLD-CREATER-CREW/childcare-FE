@@ -4,7 +4,7 @@ import {
   refreshAccessToken,
   tokenStore,
 } from "@/lib/api/client";
-import type { ListEnvelope } from "@/lib/api/client";
+import type { DownloadedFile, ListEnvelope } from "@/lib/api/client";
 import {
   childIdToInt,
   consultIdToInt,
@@ -25,6 +25,14 @@ import {
 } from "@/lib/api/spec";
 import type {
   SpecAuthTokens,
+  SpecDocumentCell,
+  SpecRenderFile,
+  SpecTemplate,
+  SpecTemplateActivate,
+  SpecTemplateDeactivate,
+  SpecTemplateDocType,
+  SpecTemplateListItem,
+  SpecStructureMeta,
   SpecChecklist,
   SpecChild,
   SpecConsult,
@@ -67,7 +75,12 @@ import type {
   DevelopmentDomain,
   DocStatus,
   DocType,
+  DocumentCell,
   DocumentDraft,
+  FileRenderStatus,
+  FormTemplate,
+  TemplateDocType,
+  TemplateStructure,
   LoginInput,
   MetricsSummary,
   ActivityRecommendations,
@@ -155,9 +168,32 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
         photoId: p.photo_id,
         fileKey: p.file_key,
         matchedChildId: p.matched_child_id,
-        similarity: p.similarity == null ? null : Math.round(p.similarity * 100),
+        similarity:
+          p.similarity == null ? null : Math.round(p.similarity * 100),
       })),
     })),
+    templateId: spec.template_id ?? null,
+    // 템플릿 주도 문서만 칸이 온다. 평문 폴백 문서는 빈 배열이 정상이다.
+    cells: (spec.cells ?? []).map(mapDocumentCell),
+    fileKey: spec.file_key ?? null,
+    // 값이 없으면 "아직 만들지 않음"으로 본다 — `file_key`가 없는데 상태까지
+    // 없으면 화면이 「내려받기」를 띄울 근거가 없다.
+    fileRenderStatus: spec.file_render_status ?? "not_requested",
+  };
+}
+
+function mapDocumentCell(c: SpecDocumentCell): DocumentCell {
+  return {
+    key: c.key,
+    table: c.table,
+    row: c.row,
+    col: c.col,
+    rowSpan: c.row_span,
+    colSpan: c.col_span,
+    label: c.label,
+    text: c.text,
+    source: c.source,
+    editable: c.editable,
   };
 }
 
@@ -689,8 +725,9 @@ export const fetchNoticeQueue = async (): Promise<NoticeQueue> => {
     generated: queue.filter((q) => q.status !== null).length,
     ready: queue.length,
     total: children.length,
-    confirmed: queue.filter((q) => q.status === "confirmed" || q.status === "sent")
-      .length,
+    confirmed: queue.filter(
+      (q) => q.status === "confirmed" || q.status === "sent",
+    ).length,
     sent: queue.filter((q) => q.status === "sent").length,
     queue,
     excluded: children
@@ -724,18 +761,27 @@ export const saveWorkingCopy = async (
   return { ok: true };
 };
 
+/**
+ * EP-014 확정.
+ *
+ * `content`가 `null`이면 `final`을 **보내지 않는다** — 서버가 저장해 둔 작업본에서
+ * 확정본을 만든다. 칸 단위로 편집한 문서가 이 경우다: 서버는 `final or working`
+ * 순으로 고르므로, 화면이 들고 있던 평문을 같이 보내면 **칸 편집 이전의 옛 글이
+ * 확정본으로 굳는다**(칸 저장은 서버 쪽 `working`만 갱신한다).
+ */
 export const confirmDocument = async (
   type: DocType,
   childId: string | null,
-  content: string,
+  content: string | null,
 ): Promise<DocumentDraft> => {
   const id = await resolveDocumentId(type, childId);
   if (id == null)
     throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
   return mapDoc(
-    await api.post<SpecDocument>(`/documents/${id}/confirm`, {
-      final: content,
-    }),
+    await api.post<SpecDocument>(
+      `/documents/${id}/confirm`,
+      content == null ? {} : { final: content },
+    ),
   );
 };
 
@@ -748,6 +794,200 @@ export const sendDocument = async (
   await api.post(`/documents/${id}/send`);
   return { ok: true };
 };
+
+/**
+ * 칸 단위 저장 — EP-013 `PUT /api/documents/{id}/draft`.
+ *
+ * **바뀐 칸만 보낸다.** 서버가 기존 칸에 병합하므로 전부 다시 보낼 이유가 없고,
+ * 두 칸을 동시에 고치다 서로의 값을 덮어쓰는 일도 줄어든다.
+ * 평문 통편집(`working`)은 `saveWorkingCopy`가 계속 맡는다 — 활성 템플릿이 없는
+ * 문서는 예전처럼 한 덩어리다.
+ */
+export const saveDocumentCells = async (
+  type: DocType,
+  childId: string | null,
+  cells: Record<string, string>,
+): Promise<{ ok: boolean }> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null) return { ok: false };
+  if (Object.keys(cells).length === 0) return { ok: true };
+  await api.put(`/documents/${id}/draft`, { cells });
+  return { ok: true };
+};
+
+// ---------- 완성 문서 파일 (EP-036·038) ----------
+
+/**
+ * EP-038 「문서 만들기」 — 확정 문서를 활성 양식에 채워 완성 파일을 만든다.
+ *
+ * 생성·확정과 분리된 별도 단계다(명세 1.5절). 다시 불러도 안전하다(멱등) —
+ * 같은 키로 덮어쓰므로 양식을 바꾼 뒤 다시 만들 수 있다.
+ *
+ * 오류는 화면이 갈라 처리한다:
+ * `409 NOT_CONFIRMED`(먼저 확정) · `409 NO_ACTIVE_TEMPLATE`(SCR-015로 안내 —
+ * **오류 응답이지만 비정상은 아니다**) · `422 RENDER_FAILED`(표 구조 확인).
+ */
+export const renderDocumentFile = async (
+  type: DocType,
+  childId: string | null,
+): Promise<{ fileKey: string | null; status: FileRenderStatus }> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null)
+    throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+  const res = await api.post<SpecRenderFile>(`/documents/${id}/file`);
+  return { fileKey: res.file_key ?? null, status: res.file_render_status };
+};
+
+/**
+ * EP-036 내려받기. 응답은 JSON이 아니라 파일 바이너리다.
+ *
+ * 확장자·Content-Type을 여기서 정하지 않는다 — 서식을 채운 결과는 `.hwpx`,
+ * 평문 폴백은 `.docx`라 고정할 수 없고, 서버가 `Content-Disposition`으로
+ * 파일명을 준다.
+ */
+export const downloadDocumentFile = async (
+  type: DocType,
+  childId: string | null,
+): Promise<DownloadedFile> => {
+  const id = await resolveDocumentId(type, childId);
+  if (id == null)
+    throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+  return api.getFile(`/documents/${id}/file`);
+};
+
+// ---------- 양식 템플릿 (EP-032~035·037·052) — SCR-015 ----------
+
+function mapStructure(
+  meta: SpecStructureMeta | null,
+): TemplateStructure | null {
+  // v1(구 mock 분석)으로 등록돼 이미 활성화된 템플릿이 DB에 남아 있다. 칸 정보가
+  // 아예 없으므로 미리보기를 그릴 수 없다 — 없는 것으로 다룬다.
+  if (!meta || meta.version !== 2 || !Array.isArray(meta.cells)) return null;
+  return {
+    sourceFormat: meta.source_format ?? null,
+    tables: (meta.tables ?? []).map((t) => ({
+      index: t.index,
+      rows: t.rows,
+      cols: t.cols,
+      nested: t.nested ?? false,
+    })),
+    cells: meta.cells.map((c) => ({
+      key: c.key,
+      table: c.table,
+      row: c.row,
+      col: c.col,
+      rowSpan: c.row_span,
+      colSpan: c.col_span,
+      label: c.label,
+      empty: c.empty,
+      existingText: c.existing_text ?? "",
+      budgetChars: c.budget_chars ?? 0,
+    })),
+  };
+}
+
+function mapTemplate(t: SpecTemplate): FormTemplate {
+  const structure = mapStructure(t.structure_meta);
+  return {
+    id: t.template_id,
+    docType: docTypeFromSpec(t.doc_type) as TemplateDocType,
+    fileKey: t.file_key,
+    structure,
+    analysisFailed: t.structure_meta?.analysis_failed === true,
+    active: t.active,
+    styleEnabled: t.style_enabled ?? false,
+    createdAt: t.created_at,
+    hasStructure: structure !== null,
+  };
+}
+
+const templateDocTypeToSpec = (t: TemplateDocType): SpecTemplateDocType =>
+  docTypeToSpec(t) as SpecTemplateDocType;
+
+/**
+ * EP-032 업로드·구조 분석. **항상 `active:false`로 등록된다** — 사람이
+ * 미리보기를 확인하고 활성화(EP-037)해야 실제로 쓰인다.
+ *
+ * 던지는 `ApiError.code`를 화면이 갈라 처리해야 한다. 특히
+ * `415 HWP_NEEDS_CONVERSION`은 "지원하지 않는 형식"이 아니라 **변환 방법**을
+ * 안내하는 자리다 — 서버 `message`에 그 안내가 그대로 담겨 온다.
+ */
+export const uploadTemplate = async (
+  docType: TemplateDocType,
+  file: File,
+): Promise<FormTemplate> => {
+  const form = new FormData();
+  form.append("doc_type", templateDocTypeToSpec(docType));
+  form.append("file", file);
+  return mapTemplate(await api.postForm<SpecTemplate>("/templates", form));
+};
+
+/** EP-033 목록. 교체 이력까지 보려면 `activeOnly`를 켜지 않는다. */
+export const fetchTemplates = async (
+  docType?: TemplateDocType,
+  activeOnly = false,
+): Promise<FormTemplate[]> => {
+  const params = new URLSearchParams();
+  if (docType) params.set("type", templateDocTypeToSpec(docType));
+  if (activeOnly) params.set("active_only", "true");
+  const qs = params.toString();
+  const res = await api.get<ListEnvelope<SpecTemplateListItem>>(
+    `/templates${qs ? `?${qs}` : ""}`,
+  );
+  // 목록에는 `structure_meta`가 오지 않는다 — 칸 미리보기는 상세(EP-034) 몫이다.
+  return res.items.map((t) => ({
+    id: t.template_id,
+    docType: docTypeFromSpec(t.doc_type) as TemplateDocType,
+    fileKey: "",
+    structure: null,
+    analysisFailed: false,
+    active: t.active,
+    styleEnabled: t.style_enabled ?? false,
+    createdAt: t.created_at,
+    hasStructure: false,
+  }));
+};
+
+/** EP-034 상세 — SCR-015 미리보기와 문서 화면의 표 구조 캐시가 함께 쓴다. */
+export const fetchTemplate = async (id: number): Promise<FormTemplate> =>
+  mapTemplate(await api.get<SpecTemplate>(`/templates/${id}`));
+
+/**
+ * EP-037 활성화. 같은 문서 타입의 기존 활성 템플릿은 서버가 자동으로 내린다
+ * (타입당 활성 1개). 분석 실패 템플릿은 `409 TEMPLATE_NOT_ANALYZABLE`.
+ */
+export const activateTemplate = async (
+  id: number,
+): Promise<{ id: number; active: boolean }> => {
+  const res = await api.post<SpecTemplateActivate>(`/templates/${id}/activate`);
+  return { id: res.template_id, active: res.active };
+};
+
+/** EP-035 비활성화. 파일은 지우지 않는다 — 교체 이력을 남긴다. */
+export const deactivateTemplate = async (
+  id: number,
+): Promise<{ id: number; active: boolean }> => {
+  const res = await api.del<SpecTemplateDeactivate>(`/templates/${id}`);
+  return { id: res.template_id, active: res.active };
+};
+
+/**
+ * EP-052 문체 예시 토글. **기본 꺼짐이고, 교사가 내용을 확인한 뒤 켠다.**
+ *
+ * 켜면 서식에 이미 적혀 있던 문안이 생성 프롬프트에 실린다. 교사가 올리는 서식은
+ * 빈 양식이 아니라 작년 작성본인 경우가 많고 실제 아동·교사 이름이 들어 있다.
+ * 서버가 마스킹하지만 완전하지 않으므로, 화면이 `existingText`를 보여 주고
+ * 경고를 읽게 한 뒤에 이 함수를 부른다.
+ */
+export const setTemplateStyleEnabled = async (
+  id: number,
+  enabled: boolean,
+): Promise<FormTemplate> =>
+  mapTemplate(
+    await api.patch<SpecTemplate>(`/templates/${id}/style`, {
+      style_enabled: enabled,
+    }),
+  );
 
 // ---------- 사진 (EP-016~019) ----------
 

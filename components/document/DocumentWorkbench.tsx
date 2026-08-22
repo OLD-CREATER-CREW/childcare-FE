@@ -3,21 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
   CheckCircle2,
+  LayoutGrid,
   Maximize2,
   Minimize2,
   RefreshCw,
   Send,
   Sparkles,
+  Type,
 } from "lucide-react";
+import { ApiError } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import {
+  useActiveTemplate,
   useConfirmDocument,
   useDocumentDraft,
   useRegenerateDraft,
   useSaveWorkingCopy,
   useSendDocument,
 } from "@/lib/queries";
+import { DocumentCells } from "@/components/document/DocumentCells";
+import { DocumentFileBar } from "@/components/document/DocumentFileBar";
 import {
   ConfirmDialog,
   EmptyState,
@@ -86,6 +93,34 @@ export function DocumentWorkbench({
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
+  /**
+   * 활성 서식이 있으면 생성이 완전히 다른 작업이 된다 — 칸마다 모델을 불러
+   * 실물 서식 11칸에 2~5분, 호출 8~12회다. 서식이 없으면 한 덩어리라 20~40초다.
+   * 안내 문구와 진행 표시를 이 값으로 가른다.
+   */
+  const activeTemplateQuery = useActiveTemplate(type);
+  const hasTemplate = activeTemplateQuery.data != null;
+
+  /** 칸이 있는 문서는 칸별 보기가 기본이다. 평문 통편집도 계속 쓸 수 있다. */
+  const hasCells = (doc?.cells.length ?? 0) > 0;
+  const [cellView, setCellView] = useState(true);
+  const showCells = hasCells && cellView;
+
+  /** 생성 경과 — 몇 분짜리 작업이라 "돌고 있다"는 표시만으로는 부족하다 */
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!regenMutation.isPending) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const t = setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => clearInterval(t);
+  }, [regenMutation.isPending]);
+
   // 초안 로드·아이 전환 시 에디터 동기화
   useEffect(() => {
     setWorking(doc ? doc.working : "");
@@ -128,7 +163,9 @@ export function DocumentWorkbench({
 
   const confirm = () =>
     confirmMutation.mutate(
-      { type, childId, content: working },
+      // 칸 단위 문서는 평문을 같이 보내지 않는다 — 칸 저장은 서버 쪽 working만
+      // 갱신하므로, 화면이 들고 있던 옛 평문을 보내면 그게 확정본이 된다.
+      { type, childId, content: hasCells ? null : working },
       {
         onSuccess: () => {
           setConfirmOpen(false);
@@ -159,6 +196,15 @@ export function DocumentWorkbench({
   const notFound =
     draftQuery.isError &&
     (draftQuery.error as { status?: number }).status === 404;
+
+  /**
+   * LLM 장애(503)는 "원천 기록이 없다"와 전혀 다른 상황인데, 예전에는 생성
+   * 실패가 전부 "아직 초안을 만들 수 없어요"로 뭉개져 교사가 하루 기록을 다시
+   * 확인하러 갔다. 서버가 원인을 메시지에 담아 주므로 갈라서 보여 준다.
+   */
+  const llmUnavailable =
+    regenMutation.error instanceof ApiError &&
+    regenMutation.error.code === "LLM_UNAVAILABLE";
 
   return (
     <>
@@ -236,9 +282,28 @@ export function DocumentWorkbench({
                 편집거리 {doc?.editDistance}%
               </span>
             )}
-            {doc && (
+            {/*
+              칸별/평문 전환. 칸 단위 편집이 기본이지만 평문 통편집도 계속
+              쓸 수 있어야 한다 — 문서 전체를 한 번에 훑어 고치는 편이 빠른
+              경우가 있고, 서버도 두 경로를 모두 받는다(DraftUpdateIn).
+            */}
+            {hasCells && (
               <button
                 className="btn ml-auto px-2.5 py-1 text-[12.5px]"
+                onClick={() => setCellView((v) => !v)}
+                title={
+                  cellView
+                    ? "문서 전체를 한 덩어리로 편집"
+                    : "서식의 칸별로 나눠 보기"
+                }
+              >
+                {cellView ? <Type size={13} /> : <LayoutGrid size={13} />}
+                {cellView ? "평문으로 보기" : "칸별로 보기"}
+              </button>
+            )}
+            {doc && (
+              <button
+                className={`btn px-2.5 py-1 text-[12.5px] ${hasCells ? "" : "ml-auto"}`}
                 onClick={() => setWide((v) => !v)}
                 title={wide ? "원천 기록을 다시 보기" : "문서를 넓게 보기"}
               >
@@ -252,9 +317,54 @@ export function DocumentWorkbench({
             <div className="draftbox">
               <Skeleton lines={8} />
               <div className="hint">
-                {regenMutation.isPending
-                  ? "AI가 초안을 쓰는 중… 문서 한 건에 20~40초쯤 걸립니다."
-                  : "초안을 불러오는 중…"}
+                {regenMutation.isPending ? (
+                  <>
+                    {hasTemplate
+                      ? "서식의 칸마다 내용을 쓰는 중… 칸이 많으면 2~5분쯤 걸립니다."
+                      : "AI가 초안을 쓰는 중… 문서 한 건에 20~40초쯤 걸립니다."}
+                    {elapsed > 0 && (
+                      <span className="ml-1 font-mono">
+                        ({Math.floor(elapsed / 60)}:
+                        {String(elapsed % 60).padStart(2, "0")} 경과)
+                      </span>
+                    )}
+                    {hasTemplate && elapsed > 20 && (
+                      <div className="mt-1">
+                        창을 닫지 말고 기다려 주세요 — 칸을 하나씩 채우고
+                        있습니다.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  "초안을 불러오는 중…"
+                )}
+              </div>
+            </div>
+          ) : llmUnavailable ? (
+            /*
+              503 LLM_UNAVAILABLE — 메시지에 원인이 담겨 온다("크레딧이
+              소진되었습니다" 등). 그대로 보여 주고 **"다시 시도"를 권하지 않는다**:
+              재시도해도 똑같이 실패하는 종류라, 버튼을 두면 교사가 원인을 모른 채
+              반복해서 누르게 된다.
+            */
+            <div className="draftbox">
+              <div className="flex items-start gap-2">
+                <AlertTriangle
+                  size={17}
+                  className="mt-0.5 flex-none text-warn"
+                />
+                <div>
+                  <p className="m-0 text-[14px] font-semibold text-ink">
+                    지금은 AI 초안을 만들 수 없습니다
+                  </p>
+                  <p className="mb-0 mt-1.5 text-[13px] leading-relaxed text-muted">
+                    {(regenMutation.error as ApiError).message}
+                  </p>
+                  <p className="mb-0 mt-2 text-[12.5px] text-muted">
+                    이 문제는 다시 눌러도 해결되지 않습니다 — 관리자에게 알려
+                    주세요. 그동안 문서는 직접 작성해 저장하실 수 있습니다.
+                  </p>
+                </div>
               </div>
             </div>
           ) : notFound || regenMutation.isError ? (
@@ -278,13 +388,20 @@ export function DocumentWorkbench({
                 아직 초안이 없습니다
               </p>
               <p className="m-0 max-w-[46ch] text-[13px] leading-relaxed text-muted">
-                {generateHint ?? (
-                  <>
-                    왼쪽 원천 기록을 바탕으로 AI가 초안을 씁니다. 20~40초쯤
-                    걸리고, 나온 초안은 <b>선생님이 검토·수정한 뒤에</b>{" "}
-                    확정합니다.
-                  </>
-                )}
+                {generateHint ??
+                  (hasTemplate ? (
+                    <>
+                      등록한 서식의 <b>칸마다</b> AI가 내용을 씁니다 — 칸이
+                      많으면 <b>2~5분</b>쯤 걸립니다. 나온 초안은{" "}
+                      <b>선생님이 검토·수정한 뒤에</b> 확정합니다.
+                    </>
+                  ) : (
+                    <>
+                      왼쪽 원천 기록을 바탕으로 AI가 초안을 씁니다. 20~40초쯤
+                      걸리고, 나온 초안은 <b>선생님이 검토·수정한 뒤에</b>{" "}
+                      확정합니다.
+                    </>
+                  ))}
               </p>
               <button
                 className="btn primary mt-1"
@@ -295,6 +412,14 @@ export function DocumentWorkbench({
                 {generateLabel}
               </button>
             </div>
+          ) : showCells ? (
+            <DocumentCells
+              type={type}
+              childId={childId}
+              cells={doc.cells}
+              templateId={doc.templateId}
+              editable={status === "draft"}
+            />
           ) : status === "draft" ? (
             <div className="draftbox">
               <textarea
@@ -381,6 +506,11 @@ export function DocumentWorkbench({
           )}
         </div>
       </div>
+
+      {/* 완성 문서 파일 — 확정 뒤에만 나타난다(FN-020). 확정 전에는 스스로 감춘다. */}
+      {doc && !notFound && (
+        <DocumentFileBar type={type} childId={childId} doc={doc} />
+      )}
 
       {sidePanel}
 

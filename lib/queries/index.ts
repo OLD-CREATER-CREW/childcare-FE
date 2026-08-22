@@ -11,6 +11,7 @@ import type {
   LoginInput,
   PasswordChangeInput,
   SignupInput,
+  TemplateDocType,
   UserAccountInput,
   UserAccountPatch,
 } from "@/lib/types";
@@ -40,6 +41,14 @@ export const queryKeys = {
   user: (userId: string) => ["users", "detail", userId] as const,
   activityRecommendations: (className: string | null) =>
     ["activities", "recommend", className ?? "all"] as const,
+  /** SCR-015 — 문서 타입별 목록. 타입을 안 주면 전 타입. */
+  templates: (docType: TemplateDocType | null) =>
+    ["templates", "list", docType ?? "all"] as const,
+  /**
+   * 템플릿 상세(칸 구조). 문서 화면의 표 구조 캐시도 **이 키를 공유한다** —
+   * 문서마다 같은 템플릿을 다시 받지 않기 위해서다.
+   */
+  template: (id: number) => ["templates", "detail", id] as const,
 };
 
 // ---- Queries ----
@@ -379,7 +388,8 @@ export const useConfirmDocument = () => {
     }: {
       type: DocType;
       childId: string | null;
-      content: string;
+      /** null이면 서버가 저장해 둔 작업본으로 확정한다(칸 단위 편집 문서) */
+      content: string | null;
     }) => apiFn.confirmDocument(type, childId, content),
     onSuccess: (doc, { type, childId }) => {
       qc.setQueryData(queryKeys.documentDraft(type, childId), doc);
@@ -407,6 +417,149 @@ export const useSendDocument = () => {
       });
       qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
       qc.invalidateQueries({ queryKey: queryKeys.checklist });
+    },
+  });
+};
+
+/**
+ * 칸 단위 저장(EP-013). **바뀐 칸만** 넘긴다.
+ *
+ * 저장 후 문서를 다시 읽지 않는다 — 교사가 타이핑하는 도중에 서버 값이 덮어쓰면
+ * 커서가 튄다. 화면이 낙관적으로 들고 있다가 확정·재조회 때 맞춘다.
+ */
+export const useSaveDocumentCells = () =>
+  useMutation({
+    mutationFn: ({
+      type,
+      childId,
+      cells,
+    }: {
+      type: DocType;
+      childId: string | null;
+      cells: Record<string, string>;
+    }) => apiFn.saveDocumentCells(type, childId, cells),
+  });
+
+// ---- 완성 문서 파일 (EP-036·038) ----
+
+export const useRenderDocumentFile = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      type,
+      childId,
+    }: {
+      type: DocType;
+      childId: string | null;
+    }) => apiFn.renderDocumentFile(type, childId),
+    // `file_key`·`file_render_status`가 바뀌었으니 문서를 다시 읽어야
+    // 「내려받기」 버튼이 나타난다.
+    onSuccess: (_res, { type, childId }) =>
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentDraft(type, childId),
+      }),
+  });
+};
+
+export const useDownloadDocumentFile = () =>
+  useMutation({
+    mutationFn: ({
+      type,
+      childId,
+    }: {
+      type: DocType;
+      childId: string | null;
+    }) => apiFn.downloadDocumentFile(type, childId),
+  });
+
+// ---- 양식 템플릿 (SCR-015) ----
+
+export const useTemplates = (docType: TemplateDocType | null) =>
+  useQuery({
+    queryKey: queryKeys.templates(docType),
+    queryFn: () => apiFn.fetchTemplates(docType ?? undefined),
+  });
+
+/**
+ * 이 문서 종류에 활성 서식이 있는가.
+ *
+ * 문서 화면이 **생성 전에** 알아야 하는 값이다 — 서식이 있으면 칸마다 모델을
+ * 부르느라 2~5분이 걸리고, 없으면 한 덩어리라 20~40초다. 안내 문구가 달라진다.
+ * 놀이이야기처럼 서식 대상이 아닌 타입은 아예 묻지 않는다.
+ */
+export const useActiveTemplate = (docType: DocType) => {
+  const templateType =
+    docType === "play_story" ? null : (docType as TemplateDocType);
+  return useQuery({
+    queryKey: [...queryKeys.templates(templateType), "active"] as const,
+    queryFn: () => apiFn.fetchTemplates(templateType as TemplateDocType, true),
+    enabled: templateType !== null,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    select: (list) => list[0] ?? null,
+  });
+};
+
+/**
+ * 템플릿 상세(칸 구조).
+ *
+ * 표 구조는 문서가 아니라 템플릿에 속하므로 **한 번 받아 오래 캐시한다** —
+ * 문서 화면이 문서마다 이걸 다시 받으면 같은 값을 반복 전송하게 된다.
+ * 템플릿은 등록 후 바뀌지 않으므로 `staleTime: Infinity`가 안전하다.
+ */
+export const useTemplate = (id: number | null) =>
+  useQuery({
+    queryKey: queryKeys.template(id ?? 0),
+    queryFn: () => apiFn.fetchTemplate(id as number),
+    enabled: id != null,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** EP-032. 실패는 화면이 `ApiError.code`로 갈라 처리한다(415 두 갈래·422). */
+export const useUploadTemplate = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docType, file }: { docType: TemplateDocType; file: File }) =>
+      apiFn.uploadTemplate(docType, file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+  });
+};
+
+export const useActivateTemplate = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFn.activateTemplate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      // 활성 양식이 바뀌면 이후 만드는 문서의 칸 구성이 달라진다 —
+      // 열려 있던 문서 화면이 옛 구조를 들고 있지 않도록 함께 비운다.
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+};
+
+export const useDeactivateTemplate = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiFn.deactivateTemplate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+};
+
+/** EP-052 문체 예시 토글 — 화면이 경고를 보인 뒤에만 부른다(개인정보). */
+export const useSetTemplateStyle = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      apiFn.setTemplateStyleEnabled(id, enabled),
+    onSuccess: (t) => {
+      qc.setQueryData(queryKeys.template(t.id), t);
+      qc.invalidateQueries({ queryKey: queryKeys.templates(null) });
+      qc.invalidateQueries({ queryKey: queryKeys.templates(t.docType) });
     },
   });
 };

@@ -22,6 +22,7 @@ import {
   Settings,
   Sparkles,
   Sprout,
+  Table2,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -102,6 +103,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
         label: "지표 대시보드",
         scr: "013",
       },
+      // 양식 관리는 초기 설정이나 서식이 바뀔 때 수시로 들르는 화면이다
+      // (스토리보드 SCR-015 — 원장·교사 공용, 청사진 Q4).
+      { href: "/templates", icon: Table2, label: "양식 관리", scr: "015" },
       { href: "/settings", icon: Settings, label: "설정", scr: "014" },
     ],
   },

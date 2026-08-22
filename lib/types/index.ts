@@ -70,12 +70,7 @@ export type DocStatus = "draft" | "confirmed" | "sent";
  * 주간/월간 토글이 아무것도 바꾸지 못했다.
  */
 export type DocType =
-  | "notice"
-  | "journal"
-  | "plan"
-  | "plan_monthly"
-  | "evaluation"
-  | "play_story";
+  "notice" | "journal" | "plan" | "plan_monthly" | "evaluation" | "play_story";
 
 /** 놀이이야기 초안에 함께 오는 사진 후보(EP-010 photo_suggestions).
  *
@@ -114,6 +109,129 @@ export type DocumentDraft = {
   generatedAt: string;
   /** 놀이이야기만 값 존재. 다른 문서는 빈 배열. */
   photoSuggestions: PhotoSuggestion[];
+  /** 이 문서를 만들 때 쓴 양식 템플릿. 없으면 평문 폴백 문서다. */
+  templateId: number | null;
+  /**
+   * 칸 단위 본문. 템플릿 주도로 만든 문서만 채워진다.
+   *
+   * 표 구조(행·열 총량)는 여기 없다 — `templateId`로 템플릿을 한 번 받아
+   * 캐시한다. 문서마다 같은 구조를 다시 받을 이유가 없다.
+   */
+  cells: DocumentCell[];
+  /** 완성 문서 파일 키. null이면 아직 없다 — 이유는 `fileRenderStatus`가 말한다. */
+  fileKey: string | null;
+  fileRenderStatus: FileRenderStatus;
+};
+
+/** `file_key`가 없는 **이유**. 화면은 이 값으로 어떤 버튼을 보일지 정한다. */
+export type FileRenderStatus =
+  /** 아직 「문서 만들기」를 누르지 않았다 — 가장 흔하다 */
+  | "not_requested"
+  /** 만들어졌다 — 내려받을 수 있다 */
+  | "ok"
+  /** 그 타입에 활성 템플릿이 없다. **정상 폴백이지 오류가 아니다** */
+  | "no_template"
+  /** 템플릿은 있으나 표 셀 매핑에 실패했다 */
+  | "failed";
+
+/** 원본 서식의 칸 하나 — 교사가 칸 단위로 검토·수정한다. */
+export type DocumentCell = {
+  key: string;
+  table: number;
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  /** `행 라벨 / 열 라벨` */
+  label: string;
+  text: string;
+  /**
+   * 이 글이 어디서 왔는지.
+   * - `ai`       모델이 썼다 — 교사가 검토할 곳
+   * - `template` 서식에 인쇄된 정형 문구 — 손대지 않는다
+   * - `teacher`  사람이 고쳤다
+   *
+   * 화면은 이 값으로 "AI가 손댄 곳"만 강조해 교사의 검토 범위를 좁힌다.
+   */
+  source: "ai" | "template" | "teacher";
+  /** `template` 칸은 false */
+  editable: boolean;
+};
+
+// ---------- 양식 템플릿 (SCR-015) ----------
+
+/**
+ * 서식을 등록할 수 있는 문서 종류.
+ *
+ * 놀이이야기는 빠진다 — 백엔드 `TEMPLATE_DOC_TYPES`에 없다. 상담 요약도
+ * 서식 대상이 아니다(기능 명세서 부록 A).
+ */
+export type TemplateDocType = Exclude<DocType, "play_story">;
+
+export const TEMPLATE_DOC_TYPES: TemplateDocType[] = [
+  "notice",
+  "journal",
+  "plan",
+  "plan_monthly",
+  "evaluation",
+];
+
+export const TEMPLATE_DOC_TYPE_LABEL: Record<TemplateDocType, string> = {
+  notice: "알림장",
+  journal: "보육일지",
+  plan: "주간계획안",
+  plan_monthly: "월간계획안",
+  evaluation: "발달평가서",
+};
+
+/** 서식에서 찾아낸 채울 칸 하나 */
+export type TemplateCell = {
+  key: string;
+  table: number;
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  /** `행 라벨 / 열 라벨` */
+  label: string;
+  /** 서식이 이 칸을 비워 뒀는지 */
+  empty: boolean;
+  /**
+   * 서식에 **이미 적혀 있던 문안**.
+   *
+   * 교사가 올리는 서식은 빈 양식이 아니라 작년 작성본인 경우가 많고 실제
+   * 아동·교사 이름이 들어 있다. `styleEnabled`를 켜면 이 글이 프롬프트에
+   * 실리므로, 화면은 켜기 전에 이 값을 보여 줘야 한다.
+   */
+  existingText: string;
+  /** 이 칸이 감당하는 글자 수 */
+  budgetChars: number;
+};
+
+export type TemplateStructure = {
+  sourceFormat: "hwpx" | "docx" | "hwp" | null;
+  tables: { index: number; rows: number; cols: number; nested: boolean }[];
+  cells: TemplateCell[];
+};
+
+export type FormTemplate = {
+  id: number;
+  docType: TemplateDocType;
+  fileKey: string;
+  /**
+   * 분석된 칸 구조. `null`인 경우가 둘이다 —
+   * 분석 실패(`analysisFailed`)이거나, 구 v1로 분석돼 칸 정보가 없는 템플릿이다.
+   * 어느 쪽이든 미리보기를 그릴 수 없다.
+   */
+  structure: TemplateStructure | null;
+  /** 분석 실패 — 활성화할 수 없다(EP-037이 409로 막는다) */
+  analysisFailed: boolean;
+  active: boolean;
+  /** 서식의 기존 문안을 생성 문체 예시로 쓸지. 기본 꺼짐(개인정보). */
+  styleEnabled: boolean;
+  createdAt: string;
+  /** 목록에서 온 항목은 구조가 없다 — 상세(EP-034)를 받아야 채워진다 */
+  hasStructure: boolean;
 };
 
 // ---------- 알림장 대기열 ----------

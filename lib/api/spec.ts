@@ -237,11 +237,61 @@ export type SpecDocument = {
   citations?: unknown[];
   /** 놀이이야기(play_story)만 채워진다. 다른 문서는 없거나 빈 배열. */
   photo_suggestions?: SpecPhotoSuggestion[];
+  /** 이 문서를 만들 때 쓴 양식 템플릿. 활성 템플릿이 없었으면 null(평문 폴백). */
+  template_id?: number | null;
+  /** 칸 단위 본문. 템플릿 주도로 만든 문서만 채워진다. */
+  cells?: SpecDocumentCell[];
+  file_key?: string | null;
+  file_render_status?: SpecFileRenderStatus | null;
   created_at: string;
   confirmed_at?: string | null;
   sent_at?: string | null;
   // --- 목 부가(화면 라벨) ---
   label?: string;
+};
+
+/**
+ * `documents.file_render_status`(명세 r6, EP-010/011/014 필드표).
+ *
+ * `file_key`가 null인 **이유**를 구분한다 — 화면은 이 값으로 「문서 만들기」와
+ * 「내려받기」 중 무엇을 보일지 정한다.
+ *
+ * - `not_requested` 아직 EP-038을 부르지 않았다(가장 흔하다)
+ * - `ok`            만들어졌다 — EP-036으로 내려받을 수 있다
+ * - `no_template`   그 타입에 활성 템플릿이 없다. **정상 폴백이지 오류가 아니다**
+ * - `failed`        템플릿은 있으나 표 셀 매핑에 실패했다
+ */
+export type SpecFileRenderStatus =
+  "not_requested" | "ok" | "no_template" | "failed";
+
+/**
+ * 검토 화면이 원본 서식 모양으로 그리기 위한 칸 하나.
+ *
+ * **표 구조(행·열·병합 총량)는 여기 오지 않는다** — 그건 문서가 아니라
+ * 템플릿에 속하므로 `template_id`로 EP-034를 한 번 받아 캐시한다.
+ * 문서마다 같은 구조를 중복 전송할 이유가 없다.
+ */
+export type SpecDocumentCell = {
+  key: string;
+  table: number;
+  row: number;
+  col: number;
+  row_span: number;
+  col_span: number;
+  /** `행 라벨 / 열 라벨` */
+  label: string;
+  text: string;
+  /** ai(생성) · template(서식에 인쇄된 정형 문구) · teacher(사람이 고침) */
+  source: "ai" | "template" | "teacher";
+  /** template 칸은 false — 서식 원형이라 손대지 않는다 */
+  editable: boolean;
+};
+
+/** EP-038 완성 문서 파일 생성 결과 */
+export type SpecRenderFile = {
+  document_id: number;
+  file_key: string | null;
+  file_render_status: SpecFileRenderStatus;
 };
 
 /** EP-010 놀이이야기 사진 후보. 놀이(날짜 + 활동) 단위로 묶여 온다. */
@@ -264,6 +314,97 @@ export type SpecDocumentListItem = {
   status: "draft" | "confirmed" | "sent";
   child_id?: number | null;
   created_at: string;
+};
+
+// ---------- 양식 템플릿 (EP-032~035·037·052) ----------
+//
+// 템플릿을 다루는 문서 타입은 5종이다 — `play_story`는 빠진다.
+// 백엔드 `TEMPLATE_DOC_TYPES`(= `document_types.DOCUMENT_TYPES`)에 놀이이야기가
+// 없고, `consult_summary`도 서식 대상이 아니다(기능 명세서 부록 A).
+
+export type SpecTemplateDocType = Exclude<SpecDocType, "play_story">;
+
+/**
+ * 분석된 서식 구조 v2 — `backend/adapters/template_analyzer.py`.
+ *
+ * v1(mock)은 부록 A의 필드명을 `B2, B4…` 셀 주소에 순서대로 꽂았고, 실물 서식과
+ * 대조하니 보육일지에서 8개 중 2개만 맞았다. v2는 의존 방향을 뒤집어
+ * **템플릿의 라벨이 곧 필드 명세**가 된다 — 그래서 부록 A 필드명이 없다.
+ *
+ * `version`이 2가 아니면(구 v1로 분석돼 이미 활성화된 템플릿이 DB에 남아 있다)
+ * 칸 미리보기를 그릴 수 없다. `analysis_failed`면 분석 자체가 실패한 것이다.
+ */
+export type SpecStructureMeta = {
+  version?: number;
+  source_format?: "hwpx" | "docx" | "hwp";
+  tables?: SpecTemplateTable[];
+  cells?: SpecTemplateCell[];
+  /** 분석 실패 템플릿에 저장되는 표식(EP-032 422). 이 경우 다른 키는 없다. */
+  analysis_failed?: boolean;
+};
+
+export type SpecTemplateTable = {
+  index: number;
+  rows: number;
+  cols: number;
+  nested?: boolean;
+};
+
+export type SpecTemplateCell = {
+  key: string;
+  table: number;
+  row: number;
+  col: number;
+  row_span: number;
+  col_span: number;
+  row_label?: string;
+  col_label?: string;
+  /** `행 라벨 / 열 라벨` — 프롬프트에도 화면에도 이 문자열을 쓴다 */
+  label: string;
+  empty: boolean;
+  /**
+   * 서식에 **이미 적혀 있던 문안**. 지우지 않고 보존한다.
+   *
+   * 교사가 올리는 서식은 빈 양식이 아니라 작년 작성본인 경우가 많고, 여기에
+   * 실제 아동·교사 이름이 들어 있다. `style_enabled`를 켜면 이 글이 프롬프트에
+   * 실리므로, 화면은 켜기 전에 이 값을 교사에게 보여 줘야 한다.
+   */
+  existing_text: string;
+  /** 이 칸이 감당하는 글자 수 — 생성 프롬프트가 분량을 맞추는 근거 */
+  budget_chars: number;
+};
+
+/** EP-032·034·052 응답 */
+export type SpecTemplate = {
+  template_id: number;
+  doc_type: SpecTemplateDocType;
+  file_key: string;
+  structure_meta: SpecStructureMeta;
+  active: boolean;
+  style_enabled?: boolean;
+  created_at: string;
+};
+
+/** EP-033 목록 항목 — `structure_meta`는 오지 않는다(상세는 EP-034) */
+export type SpecTemplateListItem = {
+  template_id: number;
+  doc_type: SpecTemplateDocType;
+  active: boolean;
+  style_enabled?: boolean;
+  created_at: string;
+};
+
+/** EP-037 활성화 응답 */
+export type SpecTemplateActivate = {
+  template_id: number;
+  doc_type: SpecTemplateDocType;
+  active: boolean;
+};
+
+/** EP-035 비활성화 응답 */
+export type SpecTemplateDeactivate = {
+  template_id: number;
+  active: boolean;
 };
 
 /** EP-016 / EP-017 사진 */

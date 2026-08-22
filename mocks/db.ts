@@ -15,9 +15,14 @@ import type {
   NoticeQueue,
   ObservationData,
   ObservationEntry,
+  DocumentCell,
+  FileRenderStatus,
+  FormTemplate,
   Photo,
   PhotoInbox,
   RecordSummary,
+  TemplateCell,
+  TemplateDocType,
   UserAccount,
   UserAccountInput,
   UserAccountPatch,
@@ -281,6 +286,12 @@ type DbState = {
   /** (r8) 계정 — 기관 하나(center_id=3)만 다룬다 */
   users: UserAccount[];
   userSeq: number;
+  /**
+   * (SCR-015) 등록된 양식 템플릿. 비활성 이력까지 남긴다 — 실서버도 파일을
+   * 지우지 않고 `active=false`로만 내린다(EP-035).
+   */
+  formTemplates: FormTemplate[];
+  templateSeq: number;
 };
 
 function recordKey(childId: string, date: string) {
@@ -656,6 +667,10 @@ function seedDocuments() {
     photoSuggestions: [],
     editDistance: null,
     generatedAt: `${TODAY}T09:00:00`,
+    templateId: null,
+    cells: [],
+    fileKey: null,
+    fileRenderStatus: "not_requested",
   });
 }
 
@@ -731,6 +746,8 @@ function createState(): DbState {
       models: { generate: "Sonnet 5", light: "Haiku 4.5" },
     },
     templates: {},
+    formTemplates: [],
+    templateSeq: 500,
     docIdByKey: new Map(),
     docSeq: 3000,
   };
@@ -742,9 +759,268 @@ seedDocuments();
 export function reseed() {
   // 양식은 기관 설정이지 연습 데이터가 아니므로 시드 초기화에도 보존한다
   const templates = state.templates;
+  const formTemplates = state.formTemplates;
+  const templateSeq = state.templateSeq;
   state = createState();
   state.templates = templates;
+  state.formTemplates = formTemplates;
+  state.templateSeq = templateSeq;
   seedDocuments();
+}
+
+// ---------- 양식 템플릿 (SCR-015 / EP-032~035·037·052) ----------
+//
+// 실서버는 파일을 실제로 열어 표 칸을 찾지만(`template_analyzer.py`), 목은
+// 브라우저에서 .hwpx/.docx를 열 수 없다. 대신 **계약과 예외 갈래를 같은 모양으로**
+// 흉내 낸다 — 화면이 검증해야 하는 것은 파싱 정확도가 아니라 415·422 분기와
+// 칸 미리보기·2단계 활성화 흐름이기 때문이다.
+
+/** 문서 타입별 칸 라벨 — 실물 서식에서 뽑은 이름을 쓴다 */
+const TEMPLATE_CELL_LABELS: Record<TemplateDocType, string[]> = {
+  notice: ["인사말", "오늘의 활동", "식사·간식", "낮잠", "맺음말"],
+  journal: [
+    "등원 / 일과",
+    "오전 / 실내놀이",
+    "오전 / 바깥놀이",
+    "점심 / 식사 지도",
+    "오후 / 낮잠",
+    "오후 / 놀이 평가 및 지원 계획",
+    "귀가 / 특이사항",
+  ],
+  plan: [
+    "월 / 놀이 주제",
+    "화 / 놀이 주제",
+    "수 / 놀이 주제",
+    "목 / 놀이 주제",
+    "금 / 놀이 주제",
+    "주간 / 놀이 평가 및 지원 계획",
+  ],
+  plan_monthly: [
+    "1주 / 주제 및 활동",
+    "2주 / 주제 및 활동",
+    "3주 / 주제 및 활동",
+    "4주 / 주제 및 활동",
+    "월 / 평가 및 지원 계획",
+  ],
+  evaluation: [
+    "신체운동·건강",
+    "의사소통",
+    "사회관계",
+    "예술경험",
+    "자연탐구",
+    "종합 의견",
+  ],
+};
+
+/**
+ * 작년 작성본에 남아 있는 문안 — `styleEnabled` 경고 화면이 보여 줄 재료다.
+ *
+ * **실제 아동 이름을 흉내 내 둔다.** 이 값이 프롬프트에 실린다는 사실을 교사가
+ * 눈으로 확인하고 켜야 하는데, 목에서 전부 빈 문자열이면 그 화면을 검증할 수 없다.
+ */
+const TEMPLATE_EXISTING_TEXT: Record<string, string> = {
+  "오후 / 놀이 평가 및 지원 계획":
+    "영아들은 블록을 높이 쌓아 올리는 데 흥미를 보였다. 지훈이가 무너진 블록을 다시 세우자 또래들이 모여들어 함께 쌓았다. 다음 주에는 더 큰 블록을 제공해 협동 놀이를 지원하고자 한다.",
+  "주간 / 놀이 평가 및 지원 계획":
+    "한 주 동안 바깥놀이에서 낙엽을 모으는 놀이가 이어졌다. 서연이가 모은 낙엽으로 왕관을 만들자 또래들이 따라 만들며 놀이가 확장되었다.",
+  "종합 의견":
+    "민준이는 또래와의 놀이에서 자신의 생각을 말로 표현하는 힘이 자랐습니다. 가정에서도 아이의 이야기를 끝까지 들어 주시면 좋겠습니다.",
+};
+
+/** 라벨이 길수록 서술 칸이라 예산이 크다 — 실물 분포(칸당 40~300자)를 흉내 낸다 */
+function budgetFor(label: string): number {
+  if (label.includes("평가") || label.includes("의견")) return 280;
+  if (label.includes("맺음말") || label.includes("인사말")) return 60;
+  return 120;
+}
+
+function analyzeMockTemplate(
+  docType: TemplateDocType,
+  fileName: string,
+): TemplateCell[] {
+  const labels = TEMPLATE_CELL_LABELS[docType];
+  return labels.map((label, i) => {
+    const existing = TEMPLATE_EXISTING_TEXT[label] ?? "";
+    return {
+      // 실서버의 키 형식(`t{table}r{row}c{col}`)을 그대로 따른다 — 문서 칸과
+      // 템플릿을 잇는 키라 형식이 다르면 목에서만 통하는 화면이 된다.
+      key: `t1r${i + 2}c2`,
+      table: 1,
+      row: i + 2,
+      col: 2,
+      rowSpan: 1,
+      // 서술 칸은 표에서 여러 열을 병합해 쓴다
+      colSpan: existing ? 6 : 1,
+      label,
+      empty: existing === "",
+      existingText: existing,
+      budgetChars: budgetFor(label),
+    };
+  });
+}
+
+/** 확장자와 내용으로 갈리는 업로드 거절 사유. `null`이면 통과. */
+export type TemplateRejection =
+  | "UNSUPPORTED_TEMPLATE_FILE"
+  | "HWP_NEEDS_CONVERSION"
+  | "TEMPLATE_ANALYSIS_FAILED";
+
+/**
+ * 실서버의 `_reject_legacy_hwp` + 분석 실패를 흉내 낸다.
+ *
+ * 실서버는 **파일 내용**으로 구 .hwp를 판별한다(확장자만 `.hwpx`로 고쳐 올리는
+ * 일이 실제로 있어서다). 목은 내용을 열 수 없으므로 파일명 규칙으로 대신한다 —
+ * 이름에 `hwp5`·`구한글`이 들어가면 확장자가 `.hwpx`여도 415로 돌려보내고,
+ * `실패`가 들어가면 422로 돌려보낸다. 화면의 세 갈래를 다 눌러 볼 수 있다.
+ */
+export function judgeTemplateUpload(
+  fileName: string,
+): TemplateRejection | null {
+  const lower = fileName.toLowerCase();
+  const ext = lower.split(".").pop() ?? "";
+  if (ext !== "docx" && ext !== "hwpx") return "UNSUPPORTED_TEMPLATE_FILE";
+  if (lower.includes("hwp5") || fileName.includes("구한글"))
+    return "HWP_NEEDS_CONVERSION";
+  if (fileName.includes("실패")) return "TEMPLATE_ANALYSIS_FAILED";
+  return null;
+}
+
+/** EP-032 — 업로드는 **항상 비활성 등록**이다. 활성화는 사람이 따로 누른다. */
+export function addFormTemplate(
+  docType: TemplateDocType,
+  fileName: string,
+  analysisFailed: boolean,
+): FormTemplate {
+  const id = ++state.templateSeq;
+  const ext = fileName.toLowerCase().endsWith(".hwpx") ? "hwpx" : "docx";
+  const template: FormTemplate = {
+    id,
+    docType,
+    fileKey: `center3/templates/${id}_source.${ext}`,
+    structure: analysisFailed
+      ? null
+      : {
+          sourceFormat: ext,
+          tables: [
+            {
+              index: 1,
+              rows: TEMPLATE_CELL_LABELS[docType].length + 2,
+              cols: 7,
+              nested: false,
+            },
+          ],
+          cells: analyzeMockTemplate(docType, fileName),
+        },
+    analysisFailed,
+    active: false,
+    styleEnabled: false,
+    createdAt: new Date().toISOString(),
+    hasStructure: !analysisFailed,
+  };
+  state.formTemplates.unshift(template);
+  return template;
+}
+
+export function listFormTemplates(
+  docType?: TemplateDocType,
+  activeOnly = false,
+): FormTemplate[] {
+  return state.formTemplates.filter(
+    (t) => (!docType || t.docType === docType) && (!activeOnly || t.active),
+  );
+}
+
+export function getFormTemplate(id: number): FormTemplate | undefined {
+  return state.formTemplates.find((t) => t.id === id);
+}
+
+export function activeTemplateFor(
+  docType: TemplateDocType,
+): FormTemplate | undefined {
+  return state.formTemplates.find((t) => t.docType === docType && t.active);
+}
+
+/** EP-037 — 같은 타입의 기존 활성은 자동으로 내려간다(타입당 활성 1개) */
+export function activateFormTemplate(id: number): FormTemplate | undefined {
+  const target = getFormTemplate(id);
+  if (!target || target.analysisFailed) return undefined;
+  state.formTemplates.forEach((t) => {
+    if (t.docType === target.docType && t.id !== target.id) t.active = false;
+  });
+  target.active = true;
+  return target;
+}
+
+export function deactivateFormTemplate(id: number): FormTemplate | undefined {
+  const t = getFormTemplate(id);
+  if (!t) return undefined;
+  t.active = false;
+  return t;
+}
+
+export function setFormTemplateStyle(
+  id: number,
+  enabled: boolean,
+): FormTemplate | undefined {
+  const t = getFormTemplate(id);
+  if (!t || t.analysisFailed) return undefined;
+  t.styleEnabled = enabled;
+  return t;
+}
+
+/**
+ * 활성 템플릿이 있는 문서에 칸 본문을 채운다.
+ *
+ * 실서버는 칸마다 LLM을 부르고(11칸에 8~12회) **간헐적으로 한 칸이 비어 온다**.
+ * 목도 한 칸을 일부러 비워 둔다 — 빈 칸이 와도 화면이 깨지지 않는지가
+ * 이 기능의 실제 실패 모드이기 때문이다.
+ */
+export function buildDocumentCells(
+  template: FormTemplate,
+  content: string,
+): DocumentCell[] {
+  const structure = template.structure;
+  if (!structure) return [];
+  const sentences = content
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // 서식 원형(existingText가 있는 칸)은 그대로 두고 빈 칸만 생성 대상으로 본다 —
+  // 실서버 `fillable_cells`도 라벨 단위로 채울 칸을 고른다.
+  let cursor = 0;
+  return structure.cells.map((cell, i) => {
+    if (cell.existingText) {
+      return {
+        key: cell.key,
+        table: cell.table,
+        row: cell.row,
+        col: cell.col,
+        rowSpan: cell.rowSpan,
+        colSpan: cell.colSpan,
+        label: cell.label,
+        text: cell.existingText,
+        source: "template" as const,
+        editable: false,
+      };
+    }
+    // 3번째 칸은 비워 둔다(모델 형식 이탈 재현). 화면이 견뎌야 하는 상태다.
+    const text =
+      i === 2
+        ? ""
+        : (sentences[cursor++ % Math.max(sentences.length, 1)] ?? "");
+    return {
+      key: cell.key,
+      table: cell.table,
+      row: cell.row,
+      col: cell.col,
+      rowSpan: cell.rowSpan,
+      colSpan: cell.colSpan,
+      label: cell.label,
+      text: text.slice(0, cell.budgetChars),
+      source: "ai" as const,
+      editable: true,
+    };
+  });
 }
 
 /** 로컬에서 읽어 온 양식을 반영 — 이후 생성되는 미확정 초안이 이 서식을 따른다 */
@@ -994,8 +1270,67 @@ export function getDraft(
     // (교사가 고른 사진과 수명이 다르다) 여기서는 항상 비워 둔다.
     // 목 응답을 만드는 쪽(handlers.specDocument)이 채운다.
     photoSuggestions: [],
+    templateId: null,
+    cells: [],
+    fileKey: null,
+    // 아직 「문서 만들기」를 누르지 않은 상태 — 실서버도 생성·확정 직후엔 이 값이다.
+    fileRenderStatus: "not_requested",
   };
+  // 놀이이야기는 서식 등록 대상이 아니다(백엔드 TEMPLATE_DOC_TYPES에 없다).
+  if (type !== "play_story") {
+    const template = activeTemplateFor(type);
+    if (template?.structure) {
+      doc.templateId = template.id;
+      doc.cells = buildDocumentCells(template, content);
+    }
+  }
   state.documents.set(key, doc);
+  return doc;
+}
+
+/**
+ * EP-038 「문서 만들기」 — 확정 문서를 양식에 채워 완성 파일을 만든다.
+ *
+ * 실패 사유를 오류 코드로 갈라 돌려준다. `NO_ACTIVE_TEMPLATE`은 **오류 응답이지만
+ * 비정상은 아니다** — 양식을 안 올린 기관의 정상 상태이고, 화면은 SCR-015로 안내한다.
+ */
+export function renderDocumentFile(
+  type: DocType,
+  childId: string | null,
+):
+  | { ok: true; fileKey: string; status: FileRenderStatus }
+  | { ok: false; code: "NOT_CONFIRMED" | "NO_ACTIVE_TEMPLATE" } {
+  const doc = state.documents.get(docKey(type, childId));
+  if (!doc) return { ok: false, code: "NOT_CONFIRMED" };
+  if (doc.status === "draft") return { ok: false, code: "NOT_CONFIRMED" };
+  const template = type === "play_story" ? undefined : activeTemplateFor(type);
+  if (!template?.structure) {
+    doc.fileRenderStatus = "no_template";
+    return { ok: false, code: "NO_ACTIVE_TEMPLATE" };
+  }
+  // 확장자는 원본 서식을 따른다 — 채우면 .hwpx, 폴백이면 .docx다.
+  const ext = template.structure.sourceFormat === "hwpx" ? "hwpx" : "docx";
+  doc.fileKey = `center3/documents/${docKey(type, childId)}_final.${ext}`;
+  doc.fileRenderStatus = "ok";
+  return { ok: true, fileKey: doc.fileKey, status: "ok" };
+}
+
+/** 칸 단위 저장(EP-013) — **바뀐 칸만** 병합한다. 서버와 같은 규약이다. */
+export function mergeDocumentCells(
+  type: DocType,
+  childId: string | null,
+  patch: Record<string, string>,
+): DocumentDraft | null {
+  const doc = state.documents.get(docKey(type, childId));
+  if (!doc) return null;
+  doc.cells = doc.cells.map((c) =>
+    c.key in patch && c.editable
+      ? { ...c, text: patch[c.key], source: "teacher" as const }
+      : c,
+  );
+  // 평문 본문도 칸을 이어 붙여 맞춰 둔다 — 통편집 화면과 값이 어긋나면
+  // 교사가 어느 쪽을 믿어야 할지 알 수 없다.
+  doc.working = doc.cells.map((c) => `[${c.label}]\n${c.text}`).join("\n\n");
   return doc;
 }
 
