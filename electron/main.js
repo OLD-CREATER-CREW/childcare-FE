@@ -5,10 +5,19 @@
 //          내장 로컬 HTTP 서버(127.0.0.1 임의 포트)로 서빙해 로드.
 //          file:// 대신 http://127.0.0.1을 쓰는 이유: MSW 서비스워커는
 //          secure context(localhost)에서만 등록되기 때문.
-const { app, BrowserWindow, shell, ipcMain, dialog } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  shell,
+  ipcMain,
+  dialog,
+  safeStorage,
+} = require("electron");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
+const crypto = require("node:crypto");
+const galleryCrypto = require("./gallery-crypto");
 
 // ELECTRON_USE_BUILD=1 이면 패키징 전에도 out/ 정적 빌드를 로드 (electron:preview)
 const isDev = !app.isPackaged && process.env.ELECTRON_USE_BUILD !== "1";
@@ -88,6 +97,116 @@ function registerTemplateIpc() {
       }
     }
     return out;
+  });
+}
+
+// ---------- 얼굴 갤러리 (FN-006) ----------
+// 얼굴 임베딩은 개인정보보호법상 민감정보(생체인식정보)다. 무상태 서버 구조에서
+// 임베딩이 영속 저장되는 유일한 지점이 이 폴더이므로, 여기만 보호하면 된다.
+//   저장 위치 : userData/galleries/<반>.enc   (AES-256-GCM)
+//   키       : OS 키체인(safeStorage) 에 넣어 둔 32바이트 랜덤 값
+// 규약: 백엔드 저장소 `ml/pipeline/INTERFACE.md` 7절
+
+const GALLERY_DIR = () => path.join(app.getPath("userData"), "galleries");
+
+/**
+ * 반 키 → 파일명.
+ *
+ * 반 키에는 `cls:우리 반` 처럼 파일명에 못 쓰는 문자가 들어온다. 읽을 수 있게
+ * 정리하되, 서로 다른 반이 같은 이름으로 뭉개지지 않도록 원본 해시를 덧붙인다.
+ */
+function galleryPath(classId) {
+  const safe = String(classId).replace(/[^a-zA-Z0-9가-힣]+/g, "_").slice(0, 40);
+  const hash = crypto.createHash("sha256").update(String(classId)).digest("hex").slice(0, 8);
+  return path.join(GALLERY_DIR(), `${safe}-${hash}.enc`);
+}
+
+/**
+ * 갤러리 암호화 키를 가져온다. 최초 1회 만들어 OS 키체인에 맡긴다.
+ *
+ * safeStorage 를 쓸 수 없는 환경에서는 **평문으로 저장하지 않고 실패시킨다.**
+ * 키와 데이터가 같은 곳에 평문으로 있으면 암호화의 의미가 없다.
+ */
+function getGalleryKey() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      "이 환경에서는 OS 키체인을 쓸 수 없어 얼굴 정보를 안전하게 저장할 수 없습니다. " +
+        "관리자에게 문의하세요.",
+    );
+  }
+  const cfg = readConfig();
+  if (cfg.galleryKey) {
+    return galleryCrypto.keyFromB64(
+      safeStorage.decryptString(Buffer.from(cfg.galleryKey, "base64")),
+    );
+  }
+  const key = galleryCrypto.newKey();
+  cfg.galleryKey = safeStorage
+    .encryptString(galleryCrypto.keyToB64(key))
+    .toString("base64");
+  writeConfig(cfg);
+  return key;
+}
+
+/** 임시 파일에 쓰고 교체한다 — 저장 중 앱이 죽어도 기존 갤러리가 깨지지 않는다 */
+function atomicWrite(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, filePath);
+}
+
+function registerFaceIpc() {
+  // 반 갤러리 읽기. 없으면 null (아직 등록 안 한 반)
+  ipcMain.handle("face:loadGallery", (_e, classId) => {
+    const file = galleryPath(classId);
+    if (!fs.existsSync(file)) return null;
+    return galleryCrypto.decryptGallery(fs.readFileSync(file), getGalleryKey());
+  });
+
+  // 반 갤러리 저장(덮어쓰기). 파기(forget)도 이 경로로 완료된다
+  ipcMain.handle("face:saveGallery", (_e, classId, entries) => {
+    atomicWrite(
+      galleryPath(classId),
+      galleryCrypto.encryptGallery(entries ?? [], getGalleryKey()),
+    );
+  });
+
+  ipcMain.handle("face:removeGallery", (_e, classId) => {
+    const file = galleryPath(classId);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  });
+
+  // 내보내기 — 교사 암호로 잠근다. 키체인 키로 잠그면 다른 PC 에서 못 연다.
+  ipcMain.handle("face:exportGallery", async (_e, classId, passphrase) => {
+    const file = galleryPath(classId);
+    if (!fs.existsSync(file)) throw new Error("내보낼 갤러리가 없습니다.");
+    const entries = galleryCrypto.decryptGallery(
+      fs.readFileSync(file),
+      getGalleryKey(),
+    );
+
+    const res = await dialog.showSaveDialog({
+      title: "갤러리 백업 저장",
+      defaultPath: `${String(classId).replace(/[^a-zA-Z0-9가-힣]+/g, "_")}_백업.ckgal`,
+      filters: [{ name: "참교육 갤러리 백업", extensions: ["ckgal"] }],
+    });
+    if (res.canceled || !res.filePath) return;
+    atomicWrite(res.filePath, galleryCrypto.exportGallery(entries, passphrase));
+  });
+
+  // 불러오기 — 기기 교체·담임 인수인계용
+  ipcMain.handle("face:importGallery", async (_e, passphrase) => {
+    const res = await dialog.showOpenDialog({
+      title: "갤러리 백업 불러오기",
+      filters: [{ name: "참교육 갤러리 백업", extensions: ["ckgal"] }],
+      properties: ["openFile"],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    return galleryCrypto.importGallery(
+      fs.readFileSync(res.filePaths[0]),
+      passphrase,
+    );
   });
 }
 
@@ -197,6 +316,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   registerTemplateIpc();
+  registerFaceIpc();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

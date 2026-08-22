@@ -9,4 +9,18 @@ contextBridge.exposeInMainWorld("desktop", {
     pickFolder: () => ipcRenderer.invoke("templates:pickFolder"),
     readAll: () => ipcRenderer.invoke("templates:readAll"),
   },
+  // 얼굴 갤러리 — 임베딩은 여기(교사 PC)에만 영속 저장된다.
+  // 시그니처 정본: `lib/face/gallery.ts` 의 DesktopFaceBridge 타입.
+  // 이 채널이 있으면 createGalleryStore() 가 메모리 대신 암호화 저장소를 고른다.
+  face: {
+    loadGallery: (classId) => ipcRenderer.invoke("face:loadGallery", classId),
+    saveGallery: (classId, entries) =>
+      ipcRenderer.invoke("face:saveGallery", classId, entries),
+    removeGallery: (classId) =>
+      ipcRenderer.invoke("face:removeGallery", classId),
+    exportGallery: (classId, passphrase) =>
+      ipcRenderer.invoke("face:exportGallery", classId, passphrase),
+    importGallery: (passphrase) =>
+      ipcRenderer.invoke("face:importGallery", passphrase),
+  },
 });
