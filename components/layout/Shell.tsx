@@ -20,6 +20,7 @@ import {
   Pencil,
   Search,
   Settings,
+  Sparkles,
   Sprout,
   TrendingUp,
   Users,
@@ -63,6 +64,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
       },
       { href: "/journal", icon: BookOpen, label: "보육일지", scr: "006" },
       { href: "/plans", icon: CalendarDays, label: "계획안", scr: "007" },
+      // 계획안 바로 아래 — 계획안이 "무엇을 할까"라면 놀이이야기는 "무엇을
+      // 했는지"라, 한 달의 앞뒤로 짝을 이룬다.
+      { href: "/play-story", icon: Sparkles, label: "놀이이야기", scr: "018" },
     ],
   },
   {

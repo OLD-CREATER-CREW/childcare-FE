@@ -48,7 +48,12 @@ export const domainFromSpec = (d: SpecDomain | null | undefined) =>
 
 /** 명세 type enum. UI의 plan은 weekly_plan, evaluation은 dev_eval에 대응 */
 export type SpecDocType =
-  "notice" | "journal" | "weekly_plan" | "monthly_plan" | "dev_eval";
+  | "notice"
+  | "journal"
+  | "weekly_plan"
+  | "monthly_plan"
+  | "dev_eval"
+  | "play_story";
 
 const DOCTYPE_TO_SPEC: Record<DocType, SpecDocType> = {
   notice: "notice",
@@ -56,6 +61,9 @@ const DOCTYPE_TO_SPEC: Record<DocType, SpecDocType> = {
   plan: "weekly_plan",
   plan_monthly: "monthly_plan",
   evaluation: "dev_eval",
+  // 놀이이야기는 UI 이름과 와이어 이름이 같다 — 계획안처럼 하나의 UI 종류가
+  // 둘로 갈리는 사정이 없다.
+  play_story: "play_story",
 };
 
 const DOCTYPE_FROM_SPEC: Record<SpecDocType, DocType> = {
@@ -64,6 +72,7 @@ const DOCTYPE_FROM_SPEC: Record<SpecDocType, DocType> = {
   weekly_plan: "plan",
   monthly_plan: "plan_monthly",
   dev_eval: "evaluation",
+  play_story: "play_story",
 };
 
 export const docTypeToSpec = (t: DocType): SpecDocType => DOCTYPE_TO_SPEC[t];
@@ -226,11 +235,26 @@ export type SpecDocument = {
   edit_distance?: number | null;
   source_record_ids?: number[];
   citations?: unknown[];
+  /** 놀이이야기(play_story)만 채워진다. 다른 문서는 없거나 빈 배열. */
+  photo_suggestions?: SpecPhotoSuggestion[];
   created_at: string;
   confirmed_at?: string | null;
   sent_at?: string | null;
   // --- 목 부가(화면 라벨) ---
   label?: string;
+};
+
+/** EP-010 놀이이야기 사진 후보. 놀이(날짜 + 활동) 단위로 묶여 온다. */
+export type SpecPhotoSuggestion = {
+  date: string;
+  activity: string | null;
+  record_ids: number[];
+  photos: {
+    photo_id: number;
+    file_key: string;
+    matched_child_id: number | null;
+    similarity: number | null;
+  }[];
 };
 
 /** EP-012 문서 목록 항목 */

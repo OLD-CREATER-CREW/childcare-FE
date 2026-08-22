@@ -404,6 +404,40 @@ function planContent(): string {
   ].join("\n");
 }
 
+/**
+ * 놀이이야기 목 문안.
+ *
+ * 실제 서버 출력의 **짜임을 그대로 흉내낸다** — 대괄호 제목 한 줄, 빈 줄,
+ * 칸 이름과 값을 두 줄로, 소주제마다 날짜·놀이 이야기·말풍선 문구 제안·추천
+ * 사진 가이드. 화면이 이 모양을 전제로 소주제 날짜와 사진 후보를 짝짓기
+ * 때문에, 목이 다른 모양을 내면 목으로 만든 화면이 실서버에서 어긋난다.
+ */
+function playStoryContent(): string {
+  return [
+    `[${CLASS_NAME} 놀이이야기]`,
+    "",
+    "놀이 주제",
+    "가을 숲과 열매를 만나요",
+    "",
+    "놀이 속 배움",
+    "가을이 깊어가는 이 달, 아이들은 산책길에서 만난 낙엽과 도토리를 통해 계절의 변화를 온몸으로 느껴보았습니다. " +
+      "바스락거리는 소리에 귀 기울이고 색이 다른 잎을 견주어 보며 관찰하는 즐거움을 알아갔습니다. " +
+      "도토리를 굴리고 열매의 크기를 비교하는 놀이 속에서 크기와 속도 같은 개념을 자연스럽게 경험하기도 했습니다. " +
+      "자연물을 함께 모으고 나누며 친구를 배려하는 마음도 자라났습니다.",
+    "",
+    "소주제별 놀이 이야기 및 사진 추천",
+    "1. 바스락바스락 낙엽을 밟아요 (10/6)",
+    "⋅놀이 이야기: 낙엽이 쌓인 길을 걸으며 소리를 듣고, 색이 다른 잎을 모아 친구와 비교해보았어요.",
+    '⋅말풍선 문구 제안: "들어봐, 바스락바스락 소리가 나!" / "내 잎은 빨간색이야!"',
+    "⋅추천 사진 가이드: 낙엽이 수북한 길에서 발을 구르는 동작 컷, 잎을 손에 들고 비교하는 클로즈업",
+    "",
+    "2. 데굴데굴 도토리를 굴려요 (10/13)",
+    "⋅놀이 이야기: 경사로에 도토리를 굴리며 어떤 것이 더 빨리 내려오는지 반복해 살펴보았어요.",
+    '⋅말풍선 문구 제안: "내 도토리가 더 빨라!" / "한 번 더 해볼래요!"',
+    "⋅추천 사진 가이드: 경사로에 도토리를 올려놓고 지켜보는 옆모습, 굴러가는 순간 포착 컷",
+  ].join("\n");
+}
+
 function evaluationContent(child: Child): string {
   const obs = state.observations.filter((o) => o.childId === child.id);
   const byDomain = DEV_DOMAINS.map(
@@ -619,6 +653,7 @@ function seedDocuments() {
     content: planContent(),
     working: planContent(),
     status: "draft",
+    photoSuggestions: [],
     editDistance: null,
     generatedAt: `${TODAY}T09:00:00`,
   });
@@ -937,6 +972,9 @@ export function getDraft(
   } else if (type === "plan") {
     content = planContent();
     label = `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`;
+  } else if (type === "play_story") {
+    content = playStoryContent();
+    label = `${CLASS_NAME} · 월간 놀이이야기`;
   } else {
     const child = childId ? getChild(childId) : undefined;
     if (!child) return null;
@@ -952,9 +990,63 @@ export function getDraft(
     status: "draft",
     editDistance: null,
     generatedAt: new Date().toISOString(),
+    // 사진 후보는 문서에 박히는 값이 아니라 생성 응답에 얹혀 오는 것이라
+    // (교사가 고른 사진과 수명이 다르다) 여기서는 항상 비워 둔다.
+    // 목 응답을 만드는 쪽(handlers.specDocument)이 채운다.
+    photoSuggestions: [],
   };
   state.documents.set(key, doc);
   return doc;
+}
+
+/**
+ * 놀이이야기 사진 후보 목(EP-010 photo_suggestions).
+ *
+ * 실제 서버는 교사가 하루 기록에 붙여 둔 사진만 날짜를 알 수 있어(업로드
+ * 시각은 촬영일이 아니다) 대개 **빈 배열**을 준다. 목도 그 상태를 기본으로
+ * 두어, 화면이 "후보 없음"을 먼저 견디는지 확인되게 한다.
+ *
+ * 후보가 있는 화면을 보려면 아래 상수를 `true`로 바꾼다.
+ */
+const PLAY_STORY_HAS_PHOTOS = false;
+
+export function playStoryPhotos() {
+  if (!PLAY_STORY_HAS_PHOTOS) return [];
+  const month = TODAY.slice(0, 7);
+  return [
+    {
+      date: `${month}-06`,
+      activity: "낙엽 밟기 산책",
+      record_ids: [9101],
+      photos: [
+        {
+          photo_id: 9001,
+          file_key: "center3/photos/9001.jpg",
+          matched_child_id: 13,
+          similarity: 0.88,
+        },
+      ],
+    },
+    {
+      date: `${month}-13`,
+      activity: "도토리 구슬 굴리기",
+      record_ids: [9102, 9103],
+      photos: [
+        {
+          photo_id: 9002,
+          file_key: "center3/photos/9002.jpg",
+          matched_child_id: 14,
+          similarity: 0.81,
+        },
+        {
+          photo_id: 9003,
+          file_key: "center3/photos/9003.jpg",
+          matched_child_id: 15,
+          similarity: 0.76,
+        },
+      ],
+    },
+  ];
 }
 
 export function saveWorking(

@@ -119,6 +119,10 @@ function specDocument(id: number, doc: DocumentDraft): SpecDocument {
     edit_distance: doc.editDistance == null ? null : doc.editDistance / 100,
     source_record_ids: [],
     citations: [],
+    // 놀이이야기만 값이 온다. 목에서도 **비어 있는 쪽을 기본**으로 둔다 —
+    // 실제 서버도 교사가 사진을 일지에 붙이지 않았으면 빈 배열을 주므로,
+    // 화면이 그 상태를 먼저 견디는지 확인되어야 한다.
+    photo_suggestions: doc.type === "play_story" ? db.playStoryPhotos() : [],
     created_at: doc.generatedAt,
     confirmed_at: confirmed ? doc.generatedAt : null,
     sent_at: doc.status === "sent" ? doc.generatedAt : null,
@@ -132,6 +136,7 @@ const DOC_TO_SPEC: Record<DocType, SpecDocType> = {
   plan: "weekly_plan",
   plan_monthly: "monthly_plan",
   evaluation: "dev_eval",
+  play_story: "play_story",
 };
 
 function specPhoto(p: Photo): SpecPhoto {
