@@ -558,17 +558,31 @@ export const saveDailyRecord = async (
 
 // ---------- 문서 (EP-010~015) ----------
 
-/** UI는 문서를 (type,childId)로 다룬다 — 명세의 document_id로 해소한다(EP-012). */
+/** 목록 순서는 명세가 보장하지 않으므로 created_at 최신순으로 고른다. */
+function newestDocumentId(items: SpecDocumentListItem[]): number | null {
+  if (items.length === 0) return null;
+  return items.reduce((newest, it) =>
+    Date.parse(it.created_at) > Date.parse(newest.created_at) ? it : newest,
+  ).document_id;
+}
+
+/**
+ * UI는 문서를 (type,childId)로 다룬다 — 명세의 document_id로 해소한다(EP-012).
+ * 날짜 단위 문서(알림장·보육일지)는 date까지 걸어야 과거 문서가 오늘 자리를
+ * 차지하지 않는다 — 생성(EP-010)이 date로 만드는 것과 기준을 맞춘다.
+ * 계획안·발달평가서는 EP-012에 대응 필터가 없어 최신순 선택으로만 좁힌다.
+ */
 async function resolveDocumentId(
   type: DocType,
   childId: string | null,
 ): Promise<number | null> {
   const params = new URLSearchParams({ type: docTypeToSpec(type) });
   if (childId) params.set("child_id", String(childIdToInt(childId)));
+  if (type === "notice" || type === "journal") params.set("date", TODAY);
   const list = await api.get<ListEnvelope<SpecDocumentListItem>>(
     `/documents?${params.toString()}`,
   );
-  return list.items[0]?.document_id ?? null;
+  return newestDocumentId(list.items);
 }
 
 /**
