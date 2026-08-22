@@ -145,6 +145,19 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
     editDistance:
       spec.edit_distance == null ? null : Math.round(spec.edit_distance * 100),
     generatedAt: spec.created_at,
+    // 놀이이야기만 값이 온다. 없거나 빈 배열이 정상이므로 화면이 그 상태를
+    // 예외로 다루지 않도록 여기서 항상 배열로 맞춰 둔다.
+    photoSuggestions: (spec.photo_suggestions ?? []).map((s) => ({
+      date: s.date,
+      activity: s.activity,
+      recordIds: s.record_ids ?? [],
+      photos: (s.photos ?? []).map((p) => ({
+        photoId: p.photo_id,
+        fileKey: p.file_key,
+        matchedChildId: p.matched_child_id,
+        similarity: p.similarity == null ? null : Math.round(p.similarity * 100),
+      })),
+    })),
   };
 }
 
@@ -593,10 +606,12 @@ export const generateDocumentDraft = async (
   type: DocType,
   childId: string | null,
   topic?: string,
+  className?: string | null,
 ): Promise<DocumentDraft> => {
   const body: {
     type: SpecDocType;
     child_id?: number;
+    class_name?: string;
     date?: string;
     period_from?: string;
     period_to?: string;
@@ -609,6 +624,15 @@ export const generateDocumentDraft = async (
     body.period_to = WEEK_TO;
   }
   if (type === "plan_monthly") {
+    body.period_from = MONTH_FROM;
+    body.period_to = MONTH_TO;
+  }
+  // 놀이이야기는 **반 단위** 문서다. 아이 하나가 아니라 반 하나의 한 달을
+  // 묶으므로 범위를 정하는 것이 child_id가 아니라 class_name이다. 서버는
+  // 반이 없으면 400을 준다 — 조용히 기관 전체로 넓히지 않는다.
+  if (type === "play_story") {
+    const cls = className?.trim();
+    if (cls) body.class_name = cls;
     body.period_from = MONTH_FROM;
     body.period_to = MONTH_TO;
   }
@@ -959,6 +983,7 @@ const DOC_LABEL_KO: Record<string, string> = {
   weekly_plan: "주간 계획안",
   monthly_plan: "월간 계획안",
   dev_eval: "발달평가서",
+  play_story: "놀이이야기",
 };
 
 export const fetchMetrics = async (): Promise<MetricsSummary> => {

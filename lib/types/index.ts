@@ -74,7 +74,30 @@ export type DocType =
   | "journal"
   | "plan"
   | "plan_monthly"
-  | "evaluation";
+  | "evaluation"
+  | "play_story";
+
+/** 놀이이야기 초안에 함께 오는 사진 후보(EP-010 photo_suggestions).
+ *
+ * 묶는 단위는 하루 기록이 아니라 **놀이(날짜 + 활동)** 다. 초안의 소주제가
+ * `1. 낙엽 밟기 산책해요 (10/6)`처럼 날짜를 달고 나오므로, `date`로 짝을
+ * 지으면 소주제 옆에 그 놀이의 사진을 놓을 수 있다.
+ *
+ * **비어 있을 수 있다.** 사진의 날짜는 서버가 `Photo.record_id`로만 아는데
+ * (업로드 시각은 촬영일이 아니다) 교사가 일지에 붙이지 않은 사진은 날짜를
+ * 알 수 없어 빠진다. 화면은 빈 배열을 정상 상태로 다뤄야 한다.
+ */
+export type PhotoSuggestion = {
+  date: string;
+  activity: string | null;
+  recordIds: number[];
+  photos: {
+    photoId: number;
+    fileKey: string;
+    matchedChildId: number | null;
+    similarity: number | null;
+  }[];
+};
 
 export type DocumentDraft = {
   type: DocType;
@@ -89,6 +112,8 @@ export type DocumentDraft = {
   /** 원본 대비 편집 비율(%) — 확정 시 박제 */
   editDistance: number | null;
   generatedAt: string;
+  /** 놀이이야기만 값 존재. 다른 문서는 빈 배열. */
+  photoSuggestions: PhotoSuggestion[];
 };
 
 // ---------- 알림장 대기열 ----------

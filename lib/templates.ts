@@ -52,6 +52,7 @@ export const DOC_TYPE_LABEL: Record<DocType, string> = {
   plan: "주간 계획안",
   plan_monthly: "월간 계획안",
   evaluation: "발달평가서",
+  play_story: "놀이이야기",
 };
 
 /** 파일명 → 문서 종류 매핑 (확장자 제거 후 키워드로 판정). 순수 함수. */

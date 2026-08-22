@@ -336,12 +336,15 @@ export const useRegenerateDraft = () => {
       type,
       childId,
       topic,
+      className,
     }: {
       type: DocType;
       childId: string | null;
-      /** 계획안에서 교사가 정한 놀이 주제. 다른 문서는 쓰지 않는다. */
+      /** 계획안·놀이이야기에서 교사가 정한 놀이 주제. 다른 문서는 쓰지 않는다. */
       topic?: string;
-    }) => apiFn.generateDocumentDraft(type, childId, topic),
+      /** 놀이이야기의 대상 반. 반 단위 문서라 이 값이 범위를 정한다. */
+      className?: string | null;
+    }) => apiFn.generateDocumentDraft(type, childId, topic, className),
     onSuccess: (data, { type, childId }) => {
       qc.setQueryData(queryKeys.documentDraft(type, childId), data);
       // 알림장 대기열의 "생성 전/검토 대기" 표시는 초안 존재 여부에서 나온다.

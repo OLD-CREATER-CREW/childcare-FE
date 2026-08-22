@@ -39,6 +39,7 @@ import type { DocType } from "@/lib/types";
 export function DocumentWorkbench({
   type,
   childId = null,
+  className = null,
   source,
   allowSend = false,
   sidePanel,
@@ -46,19 +47,26 @@ export function DocumentWorkbench({
   topic,
   generateLabel = "초안 만들기",
   generateHint,
+  canGenerate = true,
 }: {
   type: DocType;
   childId?: string | null;
+  /** 놀이이야기의 대상 반. 반 단위 문서라 이 값이 근거 기록의 범위를 정한다
+   *  — 아이 단위 문서의 `childId`와 같은 자리다. */
+  className?: string | null;
   source: React.ReactNode;
   allowSend?: boolean;
   sidePanel?: React.ReactNode;
   /** 초안 생성 불가(404) 시 안내 문구 — 알림장의 "하루 기록 없음" 등 */
   emptyMessage?: React.ReactNode;
-  /** 계획안에서 교사가 정한 놀이 주제. 생성 요청에 실려 간다. */
+  /** 계획안·놀이이야기에서 교사가 정한 놀이 주제. 생성 요청에 실려 간다. */
   topic?: string;
   generateLabel?: string;
   /** 「초안 만들기」 위에 띄울 안내 — 계획안의 "주제를 먼저 적으세요" 등 */
   generateHint?: React.ReactNode;
+  /** false면 「초안 만들기」를 막는다 — 놀이이야기에서 반을 아직 안 고른 경우.
+   *  서버도 400으로 막지만, 누르기 전에 알려 주는 편이 낫다. */
+  canGenerate?: boolean;
 }) {
   const { toast } = useApp();
   const draftQuery = useDocumentDraft(type, childId);
@@ -144,7 +152,7 @@ export function DocumentWorkbench({
 
   const regen = () =>
     regenMutation.mutate(
-      { type, childId, topic },
+      { type, childId, topic, className },
       { onSuccess: () => toast("초안을 새로 만들었습니다") },
     );
 
@@ -281,7 +289,7 @@ export function DocumentWorkbench({
               <button
                 className="btn primary mt-1"
                 onClick={regen}
-                disabled={regenMutation.isPending}
+                disabled={regenMutation.isPending || !canGenerate}
               >
                 <Sparkles size={15} />
                 {generateLabel}
