@@ -34,18 +34,14 @@ import {
   Camera,
   CircleSlash,
   FolderDown,
+  FolderOpen,
   Loader2,
   RotateCcw,
   UserRoundPlus,
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useApp } from "@/lib/store";
-import {
-  classifyPhoto,
-  formatDate,
-  publishSessionShots,
-  readPhotoDate,
-} from "@/lib/face";
+import { classifyPhoto, formatDate, readPhotoDate } from "@/lib/face";
 import type { EmbeddingB64, UseGalleryResult } from "@/lib/face";
 import type { Child } from "@/lib/types";
 import {
@@ -113,14 +109,25 @@ type FileWriter = {
   close: () => Promise<void>;
 };
 type FileHandle = { createWritable: () => Promise<FileWriter> };
+/** 폴더를 훑을 때 쓰는 항목. 표준 타입에 없어 필요한 것만 좁게 선언한다. */
+type DirEntry =
+  | { kind: "file"; name: string; getFile: () => Promise<File> }
+  | { kind: "directory"; name: string; values: () => AsyncIterable<DirEntry> };
 type DirHandle = {
   getDirectoryHandle: (
     name: string,
     o?: { create?: boolean },
   ) => Promise<DirHandle>;
   getFileHandle: (name: string, o?: { create?: boolean }) => Promise<FileHandle>;
+  /** 하위 항목 순회 — 내보내기에는 안 쓰고 폴더 가져오기에만 쓴다 */
+  values?: () => AsyncIterable<DirEntry>;
 };
-type PickerWindow = Window & { showDirectoryPicker?: () => Promise<DirHandle> };
+type PickerWindow = Window & {
+  showDirectoryPicker?: (o?: { mode?: "read" | "readwrite" }) => Promise<DirHandle>;
+};
+
+/** 한 번에 가져올 수 있는 사진 수 상한 — 1장당 약 1초라 그 이상은 못 기다린다. */
+const MAX_IMPORT_FILES = 300;
 
 const TAB_ALL = "__all__";
 const TAB_UNMATCHED = "__unmatched__";
@@ -128,12 +135,9 @@ const TAB_UNMATCHED = "__unmatched__";
 export function ClassifyPanel({
   kids,
   gallery,
-  className,
 }: {
   kids: Child[];
   gallery: UseGalleryResult;
-  /** 지금 고른 반. 세션 저장소가 반 단위로 나뉘므로 필요하다 */
-  className: string;
 }) {
   const { toast } = useApp();
   const [shots, setShots] = useState<Shot[]>([]);
@@ -143,6 +147,8 @@ export function ClassifyPanel({
   const [assignTarget, setAssignTarget] = useState<Shot | null>(null);
   const [assignSel, setAssignSel] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
+  /** 폴더를 훑는 중 — 장수가 많으면 몇 초 걸린다 */
+  const [importing, setImporting] = useState(false);
   /** 촬영일자를 못 읽어 교사 입력이 필요한 사진들 */
   const [dateDialog, setDateDialog] = useState<Shot[] | null>(null);
   const [dateInputs, setDateInputs] = useState<Record<string, string>>({});
@@ -154,28 +160,6 @@ export function ClassifyPanel({
     (id: string) => kids.find((c) => c.id === id)?.name ?? id,
     [kids],
   );
-
-  /**
-   * 분류 결과를 세션 저장소에 흘려보낸다 — 놀이이야기가 소주제 날짜에 맞춰
-   * 쓸 수 있게. 서버로 가지 않는다(`lib/face/sessionShots.ts` 머리말 참고).
-   *
-   * 배정이 끝나고 촬영일자를 아는 사진만 넘긴다. 날짜가 없으면 놀이이야기에서
-   * 놓을 자리가 없고, 미분류는 아직 교사가 손대지 않은 사진이라 제외한다.
-   */
-  useEffect(() => {
-    if (!className) return;
-    publishSessionShots(
-      className,
-      shots
-        .filter((s) => s.status === "classified" && s.childIds.length > 0)
-        .map((s) => ({
-          id: s.id,
-          file: s.file,
-          date: s.date,
-          childNames: s.childIds.map(childName),
-        })),
-    );
-  }, [shots, className, childName]);
 
   useEffect(
     () => () => {
@@ -296,6 +280,76 @@ export function ClassifyPanel({
     });
 
     void classifyQueue(fresh);
+  };
+
+  /**
+   * 폴더를 통째로 가져온다 — 하위 폴더까지 훑어 이미지 파일을 모두 올린다.
+   *
+   * 파일 선택창에서 수백 장을 일일이 고르는 대신 폴더 하나만 지정하면 된다.
+   * 내보내기(`runExport`)와 **같은 API**를 쓴다 — 그쪽은 쓰기, 이쪽은 읽기다.
+   *
+   * 촬영일자는 기존과 같이 EXIF 에서만 읽는다. 폴더 이름이 날짜처럼 보여도
+   * 쓰지 않는다 — 내보내기가 만든 폴더인지 교사가 임의로 만든 폴더인지 알 수
+   * 없고, 틀린 날짜가 조용히 박히는 편이 비어 있는 것보다 나쁘다.
+   */
+  const importFolder = async () => {
+    const picker = (window as PickerWindow).showDirectoryPicker;
+    if (!picker) {
+      toast(
+        "이 브라우저에서는 폴더 읽기를 지원하지 않습니다 — 데스크톱 앱에서 실행하세요.",
+      );
+      return;
+    }
+
+    let root: DirHandle;
+    try {
+      root = await picker({ mode: "read" });
+    } catch {
+      return; // 사용자가 폴더 선택을 취소한 것 — 조용히 끝낸다
+    }
+
+    setImporting(true);
+    try {
+      const found: File[] = [];
+      let hitLimit = false;
+
+      // 넓이 우선으로 훑는다. 재귀로 하면 깊은 폴더에서 스택이 위험하고,
+      // 중간에 상한을 걸어 빠져나오기도 번거롭다.
+      const queue: DirHandle[] = [root];
+      while (queue.length > 0) {
+        const dir = queue.shift() as DirHandle;
+        if (!dir.values) break; // 이 브라우저는 순회를 지원하지 않는다
+        for await (const entry of dir.values()) {
+          if (found.length >= MAX_IMPORT_FILES) {
+            hitLimit = true;
+            break;
+          }
+          if (entry.kind === "directory") {
+            queue.push(entry as unknown as DirHandle);
+          } else {
+            const file = await entry.getFile();
+            // 확장자가 아니라 MIME 으로 거른다 — upload() 와 같은 기준이다.
+            if (file.type.startsWith("image/")) found.push(file);
+          }
+        }
+        if (hitLimit) break;
+      }
+
+      if (found.length === 0) {
+        toast("그 폴더에서 사진을 찾지 못했습니다.");
+        return;
+      }
+      if (hitLimit) {
+        toast(
+          `사진이 너무 많아 ${MAX_IMPORT_FILES}장까지만 가져왔습니다 — 폴더를 나눠 주세요.`,
+        );
+      }
+      upload(found);
+    } catch {
+      toast("폴더를 읽지 못했습니다. 폴더 권한을 확인하세요.");
+    } finally {
+      setImporting(false);
+    }
   };
 
   /** 자동 시작이 막혔거나 분류 중에 더 올린 사진을 다시 굴린다 */
@@ -614,10 +668,27 @@ export function ClassifyPanel({
             <button
               className="btn primary big"
               onClick={() => fileInputRef.current?.click()}
-              disabled={running || gallery.size === 0}
+              disabled={running || importing || gallery.size === 0}
             >
               <N n={2} />
               <Camera size={16} /> {running ? "분류 중…" : "사진 올리기"}
+            </button>
+
+            <button
+              className="btn"
+              onClick={() => void importFolder()}
+              disabled={running || importing || gallery.size === 0}
+              title="하위 폴더까지 훑어 사진을 모두 가져옵니다"
+            >
+              {importing ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" /> 폴더 읽는 중…
+                </>
+              ) : (
+                <>
+                  <FolderOpen size={16} /> 폴더에서 가져오기
+                </>
+              )}
             </button>
 
             <div className="min-w-[220px] flex-1">

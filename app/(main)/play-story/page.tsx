@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Camera, Users } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Camera, FolderOpen, Loader2, Users } from "lucide-react";
 import { MONTH_FROM, MONTH_LABEL } from "@/lib/constants";
+import { useApp } from "@/lib/store";
 import { useChildren, useDocumentDraft } from "@/lib/queries";
-import { draftDates, groupByDate, useSessionShots } from "@/lib/face";
-import type { SessionShot } from "@/lib/face";
+import {
+  FolderCancelledError,
+  FolderUnsupportedError,
+  MAX_FOLDER_PHOTOS,
+  draftDates,
+  groupByDate,
+  pickPhotoFolder,
+  revokeFolderPhotos,
+} from "@/lib/face";
+import type { FolderPhoto } from "@/lib/face";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import { N, Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
 import type { PhotoSuggestion } from "@/lib/types";
@@ -145,7 +154,6 @@ export default function PlayStoryPage() {
         sidePanel={
           <PhotoPanel
             suggestions={suggestions}
-            className={className}
             draft={draftQuery.data?.working ?? draftQuery.data?.content ?? ""}
           />
         }
@@ -214,28 +222,74 @@ function PlayStorySource({
  *
  * ■ 출처가 둘이다
  *   서버 : 교사가 하루 기록에 붙여 둔 사진(`photos.record_id`). 개수만 안다.
- *   이 PC: 사진함에서 방금 분류한 사진(`lib/face/sessionShots`). 썸네일까지 있다.
+ *   이 PC: 사진함 내보내기가 만든 폴더(`lib/face/photoFolder`). 썸네일까지 있다.
  *
  * 교사가 묻는 것은 "이 소주제에 쓸 사진이 뭐가 있나" 하나뿐이라, 날짜를 축으로
  * 한 표에 놓는다. 다만 **출처는 행마다 분명히 적는다** — 어느 쪽이 서버에 남는
- * 사진인지 구분되지 않으면 안 된다. 로컬 사진은 서버로 가지 않고 새로고침하면
- * 사라지며(`ml/pipeline/INTERFACE.md` 1절), 그 차이가 교사의 판단을 바꾼다.
+ * 사진인지 구분되지 않으면 안 된다. 폴더 사진은 교사 PC 를 벗어나지 않으며
+ * (`ml/pipeline/INTERFACE.md` 1절), 그 차이가 교사의 판단을 바꾼다.
+ *
+ * ■ 왜 폴더를 매번 고르게 하나
+ * 폴더 핸들을 브라우저 저장소에 넣어 두면 다음부터 자동으로 읽을 수 있지만,
+ * 아동 사진이 든 폴더를 앱이 조용히 계속 들여다보는 모양이 된다. 교사가 볼
+ * 때마다 직접 고르는 편이 낫다 — 한 번 누르는 값으로 그 권한을 명시적으로
+ * 유지한다.
  *
  * ■ 비어 있는 것이 정상 상태다
- * 서버는 사진의 날짜를 `record_id`로만 안다 — 업로드 시각은 촬영일이 아니라서
- * 쓸 수 없다. 붙여 둔 사진도 분류한 사진도 없으면 초안 본문의 '추천 사진
+ * 서버는 사진의 날짜를 `record_id` 로만 안다 — 업로드 시각은 촬영일이 아니라서
+ * 쓸 수 없다. 붙여 둔 사진도 지정한 폴더도 없으면 초안 본문의 '추천 사진
  * 가이드'가 그 자리를 대신한다.
  */
 function PhotoPanel({
   suggestions,
-  className,
   draft,
 }: {
   suggestions: PhotoSuggestion[];
-  className: string | null;
   draft: string;
 }) {
-  const shots = useSessionShots(className);
+  const { toast } = useApp();
+  const [photos, setPhotos] = useState<FolderPhoto[]>([]);
+  const [folderName, setFolderName] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // 화면을 떠날 때 썸네일 objectURL 을 반드시 해제한다. 지금 값을 ref 로 들고
+  // 있어야 cleanup 이 옛 배열을 잡지 않는다.
+  const photosRef = useRef<FolderPhoto[]>([]);
+  photosRef.current = photos;
+  useEffect(() => () => revokeFolderPhotos(photosRef.current), []);
+
+  const pick = async () => {
+    setLoading(true);
+    try {
+      const { photos: found, folderName: name, hitLimit } = await pickPhotoFolder();
+      revokeFolderPhotos(photosRef.current); // 이전 선택분을 먼저 놓아준다
+      setPhotos(found);
+      setFolderName(name);
+      if (found.length === 0) {
+        toast("날짜 폴더(YYYY-MM-DD) 안에서 사진을 찾지 못했습니다.");
+      } else if (hitLimit) {
+        toast(`사진이 많아 ${MAX_FOLDER_PHOTOS}장까지만 읽었습니다.`);
+      } else {
+        toast(`${found.length}장을 읽었습니다.`);
+      }
+    } catch (e) {
+      if (e instanceof FolderCancelledError) return; // 교사가 취소한 것
+      if (e instanceof FolderUnsupportedError) {
+        toast(
+          "이 브라우저에서는 폴더 읽기를 지원하지 않습니다 — 데스크톱 앱에서 실행하세요.",
+        );
+        return;
+      }
+      // 실패 원인을 삼키지 않는다. "권한을 확인하세요"만 띄웠다가 정작 원인이
+      // 코드 버그였던 적이 있다 — 무엇이 터졌는지 화면과 콘솔 양쪽에 남긴다.
+      console.error("[사진 폴더] 읽기 실패:", e);
+      toast(
+        `폴더를 읽지 못했습니다 — ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // 초안 소주제의 날짜는 `(8/16, 8/19)`처럼 연도가 없다. 놀이이야기는 한 달짜리
   // 문서라 대상 기간의 연도를 붙이면 된다.
@@ -244,16 +298,16 @@ function PhotoPanel({
     [draft],
   );
 
-  /** 두 출처를 날짜로 합친다. 같은 날 서버·로컬이 다 있으면 한 행에 들어간다. */
+  /** 두 출처를 날짜로 합친다. 같은 날 서버·폴더가 다 있으면 한 행에 들어간다. */
   const rows = useMemo(() => {
     const map = new Map<
       string,
-      { date: string; activity: string | null; server: number; local: SessionShot[] }
+      { date: string; activity: string | null; server: number; local: FolderPhoto[] }
     >();
     const at = (date: string) => {
       const hit = map.get(date);
       if (hit) return hit;
-      const made = { date, activity: null as string | null, server: 0, local: [] as SessionShot[] };
+      const made = { date, activity: null as string | null, server: 0, local: [] as FolderPhoto[] };
       map.set(date, made);
       return made;
     };
@@ -263,34 +317,19 @@ function PhotoPanel({
       row.activity = row.activity ?? s.activity;
       row.server += s.photos.length;
     }
-    for (const g of groupByDate(shots)) at(g.date).local.push(...g.shots);
+    for (const g of groupByDate(photos)) at(g.date).local.push(...g.photos);
 
     return Array.from(map.values()).sort((a, b) =>
       a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
     );
-  }, [suggestions, shots]);
+  }, [suggestions, photos]);
 
-  if (rows.length === 0) {
-    return (
-      <div className="card">
-        <p className="m-0 flex items-center gap-1.5 text-[13px] font-semibold text-ink">
-          <Camera size={14} className="text-muted" />
-          사진 후보
-        </p>
-        <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-          이 기간에 쓸 사진이 없습니다. 초안의 <b>추천 사진 가이드</b>를 보고 어떤
-          장면을 담을지 정한 뒤, 사진함에서 분류하거나 하루 기록에 사진을 붙이면
-          여기에 날짜별로 모입니다.
-        </p>
-      </div>
-    );
-  }
-
-  const localTotal = rows.reduce((n, r) => n + r.local.length, 0);
+  const localTotal = photos.length;
+  const matchedCount = rows.filter((r) => wanted.has(r.date) && r.local.length > 0).length;
 
   return (
     <div className="card">
-      <p className="m-0 flex items-center gap-1.5 text-[13px] font-semibold text-ink">
+      <p className="m-0 flex flex-wrap items-center gap-1.5 text-[13px] font-semibold text-ink">
         <Camera size={14} className="text-muted" />
         사진 후보
         <span className="font-normal text-muted">
@@ -298,19 +337,55 @@ function PhotoPanel({
         </span>
       </p>
 
-      <div className="mt-2">
-        {rows.map((r) => (
-          <PhotoDateRow key={r.date} row={r} matched={wanted.has(r.date)} />
-        ))}
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button className="btn" onClick={() => void pick()} disabled={loading}>
+          {loading ? (
+            <>
+              <Loader2 size={14} className="animate-spin" /> 읽는 중…
+            </>
+          ) : (
+            <>
+              <FolderOpen size={14} /> {folderName ? "폴더 다시 고르기" : "사진 폴더 지정"}
+            </>
+          )}
+        </button>
+        {folderName && (
+          <span className="text-[12.5px] text-muted">
+            <b className="text-ink">{folderName}</b> · {localTotal}장
+            {matchedCount > 0 && ` · 소주제와 맞는 날짜 ${matchedCount}일`}
+          </span>
+        )}
       </div>
+
+      {!folderName && (
+        <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+          사진함에서 <b>내보내기</b>한 폴더를 지정하면, 그 안의{" "}
+          <code>아이이름/날짜</code> 구조를 읽어 소주제 날짜와 맞춰 드립니다.
+          사진은 이 PC를 벗어나지 않습니다.
+        </p>
+      )}
+
+      {rows.length === 0 ? (
+        <p className="mt-3 text-[12.5px] leading-relaxed text-muted">
+          이 기간에 쓸 사진이 없습니다. 초안의 <b>추천 사진 가이드</b>를 보고 어떤
+          장면을 담을지 정한 뒤, 사진함에서 분류·내보내기 하거나 하루 기록에
+          사진을 붙이면 여기에 날짜별로 모입니다.
+        </p>
+      ) : (
+        <div className="mt-3">
+          {rows.map((r) => (
+            <PhotoDateRow key={r.date} row={r} matched={wanted.has(r.date)} />
+          ))}
+        </div>
+      )}
 
       <p className="mt-3 text-[12.5px] text-muted">
         고르는 것은 선생님입니다 — AI는 그날 찍힌 사진을 모아 둘 뿐입니다.
       </p>
       {localTotal > 0 && (
         <p className="mt-1 text-[12.5px] text-muted">
-          <b>이 PC</b> 표시가 붙은 {localTotal}장은 서버에 올라가지 않으며,
-          새로고침하면 목록에서 사라집니다.
+          <b>이 PC</b> 표시가 붙은 사진은 지정한 폴더에서 읽은 것이며 서버에
+          올라가지 않습니다.
         </p>
       )}
     </div>
@@ -325,10 +400,12 @@ function PhotoDateRow({
   row,
   matched,
 }: {
-  row: { date: string; activity: string | null; server: number; local: SessionShot[] };
+  row: { date: string; activity: string | null; server: number; local: FolderPhoto[] };
   matched: boolean;
 }) {
-  const names = Array.from(new Set(row.local.flatMap((s) => s.childNames)));
+  const names = Array.from(
+    new Set(row.local.map((p) => p.childName).filter(Boolean)),
+  );
 
   return (
     <div
@@ -355,14 +432,14 @@ function PhotoDateRow({
       {row.local.length > 0 && (
         <>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {row.local.map((s) => (
-              // 로컬 objectURL이라 next/image의 최적화 대상이 아니다 — 그대로 쓴다.
+            {row.local.map((p) => (
+              // 로컬 objectURL 이라 next/image 의 최적화 대상이 아니다 — 그대로 쓴다.
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                key={s.id}
-                src={s.url}
-                alt={`${row.date} ${s.childNames.join(", ")}`}
-                title={s.file.name}
+                key={p.id}
+                src={p.url}
+                alt={`${row.date} ${p.childName}`}
+                title={p.id}
                 className="h-14 w-14 rounded-md object-cover"
               />
             ))}
