@@ -156,8 +156,10 @@ export function ClassifyPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
 
+  // 명단에 없는 child_id 가 그대로 노출되면 교사가 읽을 수 없다. 자동 파기가
+  // 정리하기 전이거나 다른 반으로 옮긴 아이일 수 있으므로 그 사실을 밝혀 준다.
   const childName = useCallback(
-    (id: string) => kids.find((c) => c.id === id)?.name ?? id,
+    (id: string) => kids.find((c) => c.id === id)?.name ?? `명단에 없음 (${id})`,
     [kids],
   );
 
