@@ -28,10 +28,17 @@ export { formatDate, readPhotoDate } from "./exif";
 export { galleryKey, resetGalleryCache, useGallery } from "./useGallery";
 export type { UseGalleryResult } from "./useGallery";
 export {
-  clearSessionShots,
+  FolderCancelledError,
+  FolderUnsupportedError,
+  MAX_FOLDER_PHOTOS,
+  WritePermissionDeniedError,
+  browsePhotoFolder,
   draftDates,
   groupByDate,
-  publishSessionShots,
-  useSessionShots,
-} from "./sessionShots";
-export type { SessionShot } from "./sessionShots";
+  pickPhotoFolder,
+  recommendFolderName,
+  revokeBrowsedPhotos,
+  revokeFolderPhotos,
+  saveRecommended,
+} from "./photoFolder";
+export type { BrowsedPhoto, FolderPhoto, RootDirHandle } from "./photoFolder";

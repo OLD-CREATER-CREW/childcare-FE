@@ -16,7 +16,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, ScanFace, ShieldAlert, UserRoundPlus } from "lucide-react";
+import {
+  Camera,
+  Images,
+  ScanFace,
+  ShieldAlert,
+  UserRoundPlus,
+} from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useChildRoster } from "@/lib/queries";
 import { useApp } from "@/lib/store";
@@ -32,8 +38,9 @@ import {
 } from "@/components/ui";
 import { ClassifyPanel } from "@/components/face/ClassifyPanel";
 import { EnrollPanel } from "@/components/face/EnrollPanel";
+import { FolderPanel } from "@/components/face/FolderPanel";
 
-type Tab = "classify" | "enroll";
+type Tab = "classify" | "enroll" | "browse";
 
 export default function PhotosPage() {
   const { auth, toast } = useApp();
@@ -138,7 +145,9 @@ export default function PhotosPage() {
         sub={
           tab === "classify"
             ? "사진 올리기 → 아이별 자동 분류 → 선택 내보내기"
-            : "아이별 사진 3~5장 → 반 갤러리 (임베딩은 이 PC에만 저장됩니다)"
+            : tab === "enroll"
+              ? "아이별 사진 3~5장 → 반 갤러리 (임베딩은 이 PC에만 저장됩니다)"
+              : "이 PC의 폴더를 골라 사진만 훑어봅니다 — 분류하지 않습니다"
         }
       />
       <SpecBar
@@ -239,10 +248,18 @@ export default function PhotosPage() {
                 <ScanFace size={14} className="mr-1.5 inline" />
                 얼굴 등록
               </button>
+              <button
+                className={tab === "browse" ? "on" : ""}
+                onClick={() => setTab("browse")}
+              >
+                <Images size={14} className="mr-1.5 inline" />
+                폴더 보기
+              </button>
             </div>
           </div>
 
-          {!gallery.loading && gallery.size === 0 && (
+          {/* 폴더 보기는 갤러리를 쓰지 않으므로 이 경고가 붙을 자리가 아니다 */}
+          {tab !== "browse" && !gallery.loading && gallery.size === 0 && (
             <div className="mt-4">
               <Notice kind="warn">
                 ⚠{" "}
@@ -278,10 +295,17 @@ export default function PhotosPage() {
           두 패널이 같은 gallery 인스턴스를 받으므로 등록 즉시 분류 쪽에 반영된다.
         */}
         <div hidden={tab !== "classify"}>
-          <ClassifyPanel kids={kids} gallery={gallery} className={className} />
+          <ClassifyPanel kids={kids} gallery={gallery} />
         </div>
         <div hidden={tab !== "enroll"}>
           <EnrollPanel kids={kids} gallery={gallery} />
+        </div>
+        {/*
+          폴더 보기는 반·갤러리와 무관하다 — 고른 폴더를 그냥 보여 줄 뿐이라
+          kids 도 gallery 도 받지 않는다.
+        */}
+        <div hidden={tab !== "browse"}>
+          <FolderPanel />
         </div>
       </div>
     </>
