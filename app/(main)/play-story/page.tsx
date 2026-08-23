@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, FolderOpen, Loader2, Users } from "lucide-react";
+import { Camera, FolderDown, FolderOpen, Loader2, Users } from "lucide-react";
 import { MONTH_FROM, MONTH_LABEL } from "@/lib/constants";
 import { useApp } from "@/lib/store";
 import { useChildren, useDocumentDraft } from "@/lib/queries";
@@ -9,12 +9,15 @@ import {
   FolderCancelledError,
   FolderUnsupportedError,
   MAX_FOLDER_PHOTOS,
+  WritePermissionDeniedError,
   draftDates,
   groupByDate,
   pickPhotoFolder,
+  recommendFolderName,
   revokeFolderPhotos,
+  saveRecommended,
 } from "@/lib/face";
-import type { FolderPhoto } from "@/lib/face";
+import type { FolderPhoto, RootDirHandle } from "@/lib/face";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import { N, Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
 import type { PhotoSuggestion } from "@/lib/types";
@@ -222,18 +225,21 @@ function PlayStorySource({
  *
  * ■ 출처가 둘이다
  *   서버 : 교사가 하루 기록에 붙여 둔 사진(`photos.record_id`). 개수만 안다.
- *   이 PC: 사진함 내보내기가 만든 폴더(`lib/face/photoFolder`). 썸네일까지 있다.
+ *   이 PC: 사진함 내보내기가 만든 폴더(`lib/face/photoFolder`). 실물이 보인다.
  *
  * 교사가 묻는 것은 "이 소주제에 쓸 사진이 뭐가 있나" 하나뿐이라, 날짜를 축으로
  * 한 표에 놓는다. 다만 **출처는 행마다 분명히 적는다** — 어느 쪽이 서버에 남는
  * 사진인지 구분되지 않으면 안 된다. 폴더 사진은 교사 PC 를 벗어나지 않으며
  * (`ml/pipeline/INTERFACE.md` 1절), 그 차이가 교사의 판단을 바꾼다.
  *
+ * ■ 고른 사진을 한 폴더로 모아 준다
+ * 소식지에 넣을 사진은 결국 한 곳에 모아야 한다. 날짜 폴더 여기저기서 손으로
+ * 복사하는 대신, 고른 것을 원본 폴더 안 `{N}월 놀이이야기 사진 추천` 에 써 준다.
+ *
  * ■ 왜 폴더를 매번 고르게 하나
  * 폴더 핸들을 브라우저 저장소에 넣어 두면 다음부터 자동으로 읽을 수 있지만,
  * 아동 사진이 든 폴더를 앱이 조용히 계속 들여다보는 모양이 된다. 교사가 볼
- * 때마다 직접 고르는 편이 낫다 — 한 번 누르는 값으로 그 권한을 명시적으로
- * 유지한다.
+ * 때마다 직접 고르는 편이 낫다.
  *
  * ■ 비어 있는 것이 정상 상태다
  * 서버는 사진의 날짜를 `record_id` 로만 안다 — 업로드 시각은 촬영일이 아니라서
@@ -248,9 +254,12 @@ function PhotoPanel({
   draft: string;
 }) {
   const { toast } = useApp();
+  const [root, setRoot] = useState<RootDirHandle | null>(null);
   const [photos, setPhotos] = useState<FolderPhoto[]>([]);
   const [folderName, setFolderName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sel, setSel] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
 
   // 화면을 떠날 때 썸네일 objectURL 을 반드시 해제한다. 지금 값을 ref 로 들고
   // 있어야 cleanup 이 옛 배열을 잡지 않는다.
@@ -258,19 +267,24 @@ function PhotoPanel({
   photosRef.current = photos;
   useEffect(() => () => revokeFolderPhotos(photosRef.current), []);
 
+  const month = Number(MONTH_FROM.slice(5, 7));
+  const outName = recommendFolderName(month);
+
   const pick = async () => {
     setLoading(true);
     try {
-      const { photos: found, folderName: name, hitLimit } = await pickPhotoFolder();
+      const picked = await pickPhotoFolder();
       revokeFolderPhotos(photosRef.current); // 이전 선택분을 먼저 놓아준다
-      setPhotos(found);
-      setFolderName(name);
-      if (found.length === 0) {
+      setRoot(picked.root);
+      setPhotos(picked.photos);
+      setFolderName(picked.folderName);
+      setSel([]);
+      if (picked.photos.length === 0) {
         toast("날짜 폴더(YYYY-MM-DD) 안에서 사진을 찾지 못했습니다.");
-      } else if (hitLimit) {
+      } else if (picked.hitLimit) {
         toast(`사진이 많아 ${MAX_FOLDER_PHOTOS}장까지만 읽었습니다.`);
       } else {
-        toast(`${found.length}장을 읽었습니다.`);
+        toast(`${picked.photos.length}장을 읽었습니다.`);
       }
     } catch (e) {
       if (e instanceof FolderCancelledError) return; // 교사가 취소한 것
@@ -291,6 +305,33 @@ function PhotoPanel({
     }
   };
 
+  const save = async () => {
+    if (!root || sel.length === 0) return;
+    const chosen = photos.filter((p) => sel.indexOf(p.id) >= 0);
+    setSaving(true);
+    try {
+      const { written } = await saveRecommended(root, chosen, outName);
+      toast(`${written}장을 「${outName}」 폴더에 모았습니다.`);
+      setSel([]);
+    } catch (e) {
+      if (e instanceof WritePermissionDeniedError) {
+        toast("폴더에 쓸 권한이 없어 저장하지 못했습니다.");
+        return;
+      }
+      console.error("[사진 폴더] 저장 실패:", e);
+      toast(
+        `저장하지 못했습니다 — ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = (id: string) =>
+    setSel((prev) =>
+      prev.indexOf(id) >= 0 ? prev.filter((x) => x !== id) : prev.concat(id),
+    );
+
   // 초안 소주제의 날짜는 `(8/16, 8/19)`처럼 연도가 없다. 놀이이야기는 한 달짜리
   // 문서라 대상 기간의 연도를 붙이면 된다.
   const wanted = useMemo(
@@ -302,12 +343,22 @@ function PhotoPanel({
   const rows = useMemo(() => {
     const map = new Map<
       string,
-      { date: string; activity: string | null; server: number; local: FolderPhoto[] }
+      {
+        date: string;
+        activity: string | null;
+        server: number;
+        local: FolderPhoto[];
+      }
     >();
     const at = (date: string) => {
       const hit = map.get(date);
       if (hit) return hit;
-      const made = { date, activity: null as string | null, server: 0, local: [] as FolderPhoto[] };
+      const made = {
+        date,
+        activity: null as string | null,
+        server: 0,
+        local: [] as FolderPhoto[],
+      };
       map.set(date, made);
       return made;
     };
@@ -324,8 +375,18 @@ function PhotoPanel({
     );
   }, [suggestions, photos]);
 
-  const localTotal = photos.length;
-  const matchedCount = rows.filter((r) => wanted.has(r.date) && r.local.length > 0).length;
+  /** 초안 소주제 날짜와 맞는 사진 수 — 교사가 먼저 알고 싶어 하는 값이다. */
+  const matchedTotal = useMemo(
+    () => photos.filter((p) => wanted.has(p.date)).length,
+    [photos, wanted],
+  );
+
+  /** 초안 소주제와 날짜가 맞는 사진만 한 번에 고른다 — 손이 가장 많이 가는 일이다. */
+  const selectMatched = () => {
+    const ids = photos.filter((p) => wanted.has(p.date)).map((p) => p.id);
+    setSel(ids);
+    if (ids.length === 0) toast("초안 소주제 날짜와 맞는 사진이 없습니다.");
+  };
 
   return (
     <div className="card">
@@ -338,21 +399,31 @@ function PhotoPanel({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <button className="btn" onClick={() => void pick()} disabled={loading}>
+        <button
+          className="btn"
+          onClick={() => void pick()}
+          disabled={loading || saving}
+        >
           {loading ? (
             <>
               <Loader2 size={14} className="animate-spin" /> 읽는 중…
             </>
           ) : (
             <>
-              <FolderOpen size={14} /> {folderName ? "폴더 다시 고르기" : "사진 폴더 지정"}
+              <FolderOpen size={14} />{" "}
+              {folderName ? "폴더 다시 고르기" : "사진 폴더 지정"}
             </>
           )}
         </button>
         {folderName && (
           <span className="text-[12.5px] text-muted">
-            <b className="text-ink">{folderName}</b> · {localTotal}장
-            {matchedCount > 0 && ` · 소주제와 맞는 날짜 ${matchedCount}일`}
+            <b className="text-ink">{folderName}</b> · {photos.length}장
+            {matchedTotal > 0 && (
+              <>
+                {" · "}
+                <b className="text-green-deep">소주제 날짜 {matchedTotal}장</b>
+              </>
+            )}
           </span>
         )}
       </div>
@@ -374,18 +445,61 @@ function PhotoPanel({
       ) : (
         <div className="mt-3">
           {rows.map((r) => (
-            <PhotoDateRow key={r.date} row={r} matched={wanted.has(r.date)} />
+            <PhotoDateRow
+              key={r.date}
+              row={r}
+              matched={wanted.has(r.date)}
+              sel={sel}
+              onToggle={toggle}
+            />
           ))}
+        </div>
+      )}
+
+      {photos.length > 0 && (
+        <div className="btnrow mt-3">
+          <button
+            className="btn primary"
+            onClick={() => void save()}
+            disabled={saving || sel.length === 0}
+          >
+            {saving ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> 모으는 중…
+              </>
+            ) : (
+              <>
+                <FolderDown size={14} /> 고른 사진 모으기
+                {sel.length > 0 ? ` (${sel.length})` : ""}
+              </>
+            )}
+          </button>
+          <button
+            className="btn ghost"
+            onClick={selectMatched}
+            disabled={saving}
+          >
+            소주제 날짜만 고르기
+          </button>
+          {sel.length > 0 && (
+            <button
+              className="btn ghost"
+              onClick={() => setSel([])}
+              disabled={saving}
+            >
+              선택 비우기
+            </button>
+          )}
         </div>
       )}
 
       <p className="mt-3 text-[12.5px] text-muted">
         고르는 것은 선생님입니다 — AI는 그날 찍힌 사진을 모아 둘 뿐입니다.
       </p>
-      {localTotal > 0 && (
+      {photos.length > 0 && (
         <p className="mt-1 text-[12.5px] text-muted">
-          <b>이 PC</b> 표시가 붙은 사진은 지정한 폴더에서 읽은 것이며 서버에
-          올라가지 않습니다.
+          고른 사진은 <b>{folderName}</b> 안에 <b>{outName}</b> 폴더를 만들어
+          복사합니다. 원본은 그대로 두고, 서버에는 올라가지 않습니다.
         </p>
       )}
     </div>
@@ -395,31 +509,52 @@ function PhotoPanel({
 /**
  * 날짜 한 줄. 소주제 날짜와 맞으면 왼쪽에 선을 그어 눈에 띄게 한다 —
  * 초안과 짝이 맞는 날을 교사가 먼저 보게 하려는 것이다.
+ *
+ * 사진은 사진함 분류 탭과 **같은 `.photogrid`·`.photo` 를 쓴다.** 얼굴이 보일
+ * 만큼 커야 고를 수 있고, 두 화면에서 고르는 동작이 같아야 헷갈리지 않는다.
  */
 function PhotoDateRow({
   row,
   matched,
+  sel,
+  onToggle,
 }: {
-  row: { date: string; activity: string | null; server: number; local: FolderPhoto[] };
+  row: {
+    date: string;
+    activity: string | null;
+    server: number;
+    local: FolderPhoto[];
+  };
   matched: boolean;
+  sel: string[];
+  onToggle: (id: string) => void;
 }) {
-  const names = Array.from(
-    new Set(row.local.map((p) => p.childName).filter(Boolean)),
-  );
-
   return (
     <div
-      className={`border-line border-t py-2 first:border-t-0 ${
-        matched ? "border-l-2 border-l-green-deep pl-2.5" : ""
-      }`}
+      className={
+        matched
+          ? // 초안이 실제로 쓴 날짜다. 가는 선 하나로는 눈에 안 들어와서
+            // 바탕색·굵은 날짜·배지까지 함께 준다 — 교사가 이 줄부터 본다.
+            "my-1.5 rounded-lg border-l-[3px] border-l-green-deep bg-green-ghost px-2.5 py-2.5"
+          : "border-line border-t py-2.5 first:border-t-0"
+      }
     >
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="font-mono text-[12.5px] text-muted">
+        <span
+          className={`font-mono text-[12.5px] ${
+            matched ? "font-bold text-green-deep" : "text-muted"
+          }`}
+        >
           {row.date.slice(5).replace("-", "/")}
         </span>
-        <span className="text-[13px]">
-          {row.activity ?? <span className="text-muted">활동 미기재</span>}
-        </span>
+        {matched && (
+          <span className="rounded-md bg-green-soft px-1.5 py-0.5 text-[10.5px] font-bold text-green-deep">
+            소주제 날짜
+          </span>
+        )}
+        {/* 활동명은 서버 기록에만 있다. 폴더에서만 온 날짜는 비워 둔다 —
+            "활동 미기재" 같은 빈자리 표시는 알려 주는 것 없이 줄만 어지럽힌다. */}
+        {row.activity && <span className="text-[13px]">{row.activity}</span>}
         <span className="ml-auto whitespace-nowrap text-[12.5px] text-muted">
           {row.server > 0 && <>서버 {row.server}장</>}
           {row.server > 0 && row.local.length > 0 && " · "}
@@ -430,24 +565,32 @@ function PhotoDateRow({
       </div>
 
       {row.local.length > 0 && (
-        <>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {row.local.map((p) => (
-              // 로컬 objectURL 이라 next/image 의 최적화 대상이 아니다 — 그대로 쓴다.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+        <div className="photogrid">
+          {row.local.map((p) => {
+            const on = sel.indexOf(p.id) >= 0;
+            return (
+              <button
                 key={p.id}
-                src={p.url}
-                alt={`${row.date} ${p.childName}`}
+                type="button"
+                className={`photo ${on ? "sel" : ""}`}
+                onClick={() => onToggle(p.id)}
+                aria-pressed={on}
+                aria-label={`${p.date} ${p.childName} ${p.name}`}
                 title={p.id}
-                className="h-14 w-14 rounded-md object-cover"
-              />
-            ))}
-          </div>
-          {names.length > 0 && (
-            <p className="mt-1 text-[12.5px] text-muted">{names.join(", ")}</p>
-          )}
-        </>
+              >
+                {/* 로컬 objectURL 이라 next/image 의 최적화 대상이 아니다 */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.url}
+                  alt={`${row.date} ${p.childName}`}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+                <span className="ck">{on ? "✓" : ""}</span>
+                {p.childName && <span className="sim">{p.childName}</span>}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );

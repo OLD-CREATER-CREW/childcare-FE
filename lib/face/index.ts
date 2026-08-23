@@ -31,9 +31,14 @@ export {
   FolderCancelledError,
   FolderUnsupportedError,
   MAX_FOLDER_PHOTOS,
+  WritePermissionDeniedError,
+  browsePhotoFolder,
   draftDates,
   groupByDate,
   pickPhotoFolder,
+  recommendFolderName,
+  revokeBrowsedPhotos,
   revokeFolderPhotos,
+  saveRecommended,
 } from "./photoFolder";
-export type { FolderPhoto } from "./photoFolder";
+export type { BrowsedPhoto, FolderPhoto, RootDirHandle } from "./photoFolder";

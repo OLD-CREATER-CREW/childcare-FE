@@ -36,11 +36,26 @@ export type FolderPhoto = {
 type DirEntry =
   | { kind: "file"; name: string; getFile: () => Promise<File> }
   | { kind: "directory"; name: string; values: () => AsyncIterable<DirEntry> };
-type PickerWindow = Window & {
-  showDirectoryPicker?: (o?: { mode?: "read" | "readwrite" }) => Promise<{
-    name: string;
-    values: () => AsyncIterable<DirEntry>;
+type FileWriter = { write: (data: Blob) => Promise<void>; close: () => Promise<void> };
+export type RootDirHandle = {
+  name: string;
+  values: () => AsyncIterable<DirEntry>;
+  getDirectoryHandle: (
+    name: string,
+    o?: { create?: boolean },
+  ) => Promise<{
+    getFileHandle: (
+      name: string,
+      o?: { create?: boolean },
+    ) => Promise<{ createWritable: () => Promise<FileWriter> }>;
   }>;
+  queryPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
+  requestPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
+};
+type PickerWindow = Window & {
+  showDirectoryPicker?: (o?: {
+    mode?: "read" | "readwrite";
+  }) => Promise<RootDirHandle>;
 };
 
 const DATE_DIR = /^\d{4}-\d{2}-\d{2}$/;
@@ -62,6 +77,7 @@ export class FolderCancelledError extends Error {}
  * 똑같이 동작한다. 경로 어디에 있든 날짜 폴더를 찾기 때문이다.
  */
 export async function pickPhotoFolder(): Promise<{
+  root: RootDirHandle;
   photos: FolderPhoto[];
   folderName: string;
   hitLimit: boolean;
@@ -69,7 +85,9 @@ export async function pickPhotoFolder(): Promise<{
   const picker = (window as PickerWindow).showDirectoryPicker;
   if (!picker) throw new FolderUnsupportedError();
 
-  let root: { name: string; values: () => AsyncIterable<DirEntry> };
+  // 읽기 권한만 요구한다. 추천 폴더를 만들 때 쓰기 권한을 따로 묻는다
+  // (`saveRecommended`) — 둘러보기만 하는 교사에게 쓰기까지 허락받지 않는다.
+  let root: RootDirHandle;
   try {
     root = await picker({ mode: "read" });
   } catch {
@@ -119,7 +137,152 @@ export async function pickPhotoFolder(): Promise<{
     }
   }
 
+  return { root, photos, folderName: root.name, hitLimit };
+}
+
+/** 폴더를 그냥 훑어볼 때 쓰는 사진 한 장 — 날짜·아이를 요구하지 않는다. */
+export type BrowsedPhoto = {
+  /** 폴더 안 상대 경로. 같은 파일명이 여러 폴더에 있어도 겹치지 않는다 */
+  id: string;
+  name: string;
+  /** 상위 폴더 경로("가상아동_민준/2026-08-16"). 최상위면 빈 문자열 */
+  dir: string;
+  file: File;
+  url: string;
+};
+
+/**
+ * 고른 폴더의 사진을 **구조를 따지지 않고** 전부 읽는다.
+ *
+ * `pickPhotoFolder` 와 다른 점은 하나다 — 저쪽은 `YYYY-MM-DD` 폴더 아래 있는
+ * 사진만 거둬 온다(놀이이야기가 날짜로 짝을 맞춰야 해서). 이쪽은 그냥 보여
+ * 주는 것이 목적이라 아무 폴더의 사진이든 다 가져온다.
+ *
+ * 읽기만 한다. 서버로 보내지도, 브라우저 저장소에 쓰지도 않는다.
+ */
+export async function browsePhotoFolder(): Promise<{
+  photos: BrowsedPhoto[];
+  folderName: string;
+  hitLimit: boolean;
+}> {
+  const picker = (window as PickerWindow).showDirectoryPicker;
+  if (!picker) throw new FolderUnsupportedError();
+
+  let root: RootDirHandle;
+  try {
+    root = await picker({ mode: "read" });
+  } catch {
+    throw new FolderCancelledError();
+  }
+
+  const photos: BrowsedPhoto[] = [];
+  let hitLimit = false;
+
+  // 최상위는 `values`를 화살표로 감싼다 — 함수만 떼어 담으면 `this`가 끊겨
+  // "Illegal invocation"이 난다(`pickPhotoFolder` 와 같은 이유).
+  const queue: { dir: { values: () => AsyncIterable<DirEntry> }; path: string[] }[] = [
+    { dir: { values: () => root.values() }, path: [] },
+  ];
+
+  while (queue.length > 0 && !hitLimit) {
+    const { dir, path } = queue.shift()!;
+    for await (const entry of dir.values()) {
+      if (photos.length >= MAX_FOLDER_PHOTOS) {
+        hitLimit = true;
+        break;
+      }
+      if (entry.kind === "directory") {
+        queue.push({ dir: entry, path: path.concat(entry.name) });
+        continue;
+      }
+      const file = await entry.getFile();
+      if (!file.type.startsWith("image/")) continue;
+      photos.push({
+        id: path.concat(entry.name).join("/"),
+        name: entry.name,
+        dir: path.join("/"),
+        file,
+        url: URL.createObjectURL(file),
+      });
+    }
+  }
+
   return { photos, folderName: root.name, hitLimit };
+}
+
+/** `browsePhotoFolder` 가 만든 objectURL 을 해제한다. */
+export function revokeBrowsedPhotos(photos: readonly BrowsedPhoto[]): void {
+  photos.forEach((p) => URL.revokeObjectURL(p.url));
+}
+
+export class WritePermissionDeniedError extends Error {}
+
+/** 파일 이름에 못 쓰는 문자를 걷어낸다(`ClassifyPanel`의 safeName 과 같은 규칙). */
+const safeName = (s: string) =>
+  s.replace(/[\\/:*?"<>|]/g, "_").trim() || "이름없음";
+
+/** `~월 놀이이야기 사진 추천` — 달마다 폴더가 갈리도록 월을 앞에 둔다. */
+export function recommendFolderName(month: number): string {
+  return `${month}월 놀이이야기 사진 추천`;
+}
+
+/**
+ * 고른 사진을 원본 폴더 **안에** 새 폴더를 만들어 모아 준다.
+ *
+ * ■ 왜 원본 폴더 안인가
+ * 교사가 이미 그 폴더를 열어 뒀고 사진이 거기 있다. 다른 곳에 만들면 어디에
+ * 저장됐는지 다시 찾아야 한다.
+ *
+ * ■ 파일 이름 앞에 날짜를 붙인다
+ * 원본은 `{아이}/{날짜}/` 로 나뉘어 있어 같은 파일명이 여러 날짜에 있을 수
+ * 있다(카카오톡 사진이 특히 그렇다). 한 폴더로 모으면 그대로 덮어써지므로
+ * `2026-08-16_원본이름.jpg` 로 바꿔 넣는다 — 겹침도 막고 날짜도 남는다.
+ *
+ * ■ 쓰기 권한은 이때 묻는다
+ * 폴더를 고를 때는 읽기만 요구했다. 실제로 쓰기 직전에 물어야 교사가 무엇에
+ * 동의하는지 안다.
+ */
+export async function saveRecommended(
+  root: RootDirHandle,
+  photos: readonly FolderPhoto[],
+  folderName: string,
+): Promise<{ written: number; folder: string }> {
+  if (photos.length === 0) return { written: 0, folder: folderName };
+
+  // 이미 허용돼 있으면 다시 묻지 않는다.
+  const state =
+    (await root.queryPermission?.({ mode: "readwrite" })) ?? "prompt";
+  if (state !== "granted") {
+    const asked = await root.requestPermission?.({ mode: "readwrite" });
+    if (asked !== "granted") throw new WritePermissionDeniedError();
+  }
+
+  const dir = await root.getDirectoryHandle(safeName(folderName), {
+    create: true,
+  });
+
+  const used = new Set<string>();
+  let written = 0;
+  for (const p of photos) {
+    let name = safeName(`${p.date}_${p.name}`);
+    if (used.has(name)) {
+      const dot = name.lastIndexOf(".");
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : "";
+      let i = 2;
+      while (used.has(`${stem}_${i}${ext}`)) i += 1;
+      name = `${stem}_${i}${ext}`;
+    }
+    used.add(name);
+
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(p.file);
+    await writable.close();
+    written += 1;
+  }
+
+  return { written, folder: folderName };
 }
 
 /** objectURL 을 해제한다. 폴더를 다시 고르거나 화면을 떠날 때 반드시 부른다. */
