@@ -270,7 +270,6 @@ export function ClassifyPanel({
     if (fresh.length === 0) return;
 
     setShots((prev) => prev.concat(fresh));
-    toast(`${fresh.length}장 올렸습니다 — 얼굴 분류를 시작합니다`);
 
     // 촬영일자는 얼굴 분류와 무관하므로 병렬로 읽는다(파일 앞 256KB만 본다)
     fresh.forEach((s) => {
@@ -279,6 +278,18 @@ export function ClassifyPanel({
       });
     });
 
+    // 갤러리가 비어 있으면 **올려서 보여 주기만 한다.** 대조할 얼굴이 없어
+    // 분류하면 전부 미분류로 떨어질 뿐인데, 1장당 1초씩 헛되이 기다리게 된다.
+    // 사진을 먼저 훑어보고 등록은 나중에 하는 순서도 막지 않는다 — 사진은
+    // "대기" 로 남고, 등록을 마친 뒤 「분류 시작」을 누르면 이어서 돌아간다.
+    if (gallery.size === 0) {
+      toast(
+        `${fresh.length}장 올렸습니다 — 얼굴 등록을 먼저 하면 분류할 수 있습니다`,
+      );
+      return;
+    }
+
+    toast(`${fresh.length}장 올렸습니다 — 얼굴 분류를 시작합니다`);
     void classifyQueue(fresh);
   };
 
@@ -668,7 +679,7 @@ export function ClassifyPanel({
             <button
               className="btn primary big"
               onClick={() => fileInputRef.current?.click()}
-              disabled={running || importing || gallery.size === 0}
+              disabled={running || importing}
             >
               <N n={2} />
               <Camera size={16} /> {running ? "분류 중…" : "사진 올리기"}
@@ -677,7 +688,7 @@ export function ClassifyPanel({
             <button
               className="btn"
               onClick={() => void importFolder()}
-              disabled={running || importing || gallery.size === 0}
+              disabled={running || importing}
               title="하위 폴더까지 훑어 사진을 모두 가져옵니다"
             >
               {importing ? (
