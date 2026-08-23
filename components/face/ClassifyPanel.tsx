@@ -40,7 +40,12 @@ import {
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useApp } from "@/lib/store";
-import { classifyPhoto, formatDate, readPhotoDate } from "@/lib/face";
+import {
+  classifyPhoto,
+  formatDate,
+  publishSessionShots,
+  readPhotoDate,
+} from "@/lib/face";
 import type { EmbeddingB64, UseGalleryResult } from "@/lib/face";
 import type { Child } from "@/lib/types";
 import {
@@ -123,9 +128,12 @@ const TAB_UNMATCHED = "__unmatched__";
 export function ClassifyPanel({
   kids,
   gallery,
+  className,
 }: {
   kids: Child[];
   gallery: UseGalleryResult;
+  /** 지금 고른 반. 세션 저장소가 반 단위로 나뉘므로 필요하다 */
+  className: string;
 }) {
   const { toast } = useApp();
   const [shots, setShots] = useState<Shot[]>([]);
@@ -146,6 +154,28 @@ export function ClassifyPanel({
     (id: string) => kids.find((c) => c.id === id)?.name ?? id,
     [kids],
   );
+
+  /**
+   * 분류 결과를 세션 저장소에 흘려보낸다 — 놀이이야기가 소주제 날짜에 맞춰
+   * 쓸 수 있게. 서버로 가지 않는다(`lib/face/sessionShots.ts` 머리말 참고).
+   *
+   * 배정이 끝나고 촬영일자를 아는 사진만 넘긴다. 날짜가 없으면 놀이이야기에서
+   * 놓을 자리가 없고, 미분류는 아직 교사가 손대지 않은 사진이라 제외한다.
+   */
+  useEffect(() => {
+    if (!className) return;
+    publishSessionShots(
+      className,
+      shots
+        .filter((s) => s.status === "classified" && s.childIds.length > 0)
+        .map((s) => ({
+          id: s.id,
+          file: s.file,
+          date: s.date,
+          childNames: s.childIds.map(childName),
+        })),
+    );
+  }, [shots, className, childName]);
 
   useEffect(
     () => () => {

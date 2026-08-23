@@ -235,7 +235,7 @@ export default function PhotosPage() {
           두 패널이 같은 gallery 인스턴스를 받으므로 등록 즉시 분류 쪽에 반영된다.
         */}
         <div hidden={tab !== "classify"}>
-          <ClassifyPanel kids={kids} gallery={gallery} />
+          <ClassifyPanel kids={kids} gallery={gallery} className={className} />
         </div>
         <div hidden={tab !== "enroll"}>
           <EnrollPanel kids={kids} gallery={gallery} />
