@@ -26,12 +26,19 @@ import type { EmbeddingB64 } from "./types";
 /**
  * 갤러리 파일을 가르는 키.
  *
- * 서버 명단(EP-004)이 아직 `class_id`를 주지 않아 반 **이름**을 키로 쓴다.
- * 반 이름이 바뀌면 갤러리가 새 파일로 갈라지므로, `class_id`가 생기면 이 함수
- * 하나만 고치면 된다 — 호출부는 전부 이 키를 통해서만 저장소에 접근한다.
+ * ■ 기관(centerId)이 반드시 들어가야 한다
+ * 반 이름만 쓰면 **다른 기관·다른 계정이라도 반 이름이 같으면 같은 파일**을 쓴다.
+ * 데모 기관의 "햇님반"과 실제 기관의 "햇님반"이 한 파일에 섞여, 명단에 없는
+ * 아이의 임베딩이 분류 결과에 튀어나온다(실제로 4명 반에 7개가 쌓였다).
+ * 기관이 다른 얼굴 데이터가 한 파일에 모이는 것이라 정확도 문제이자 개인정보 문제다.
+ *
+ * ■ class_id 가 생기면
+ * 서버 명단(EP-004)이 아직 `class_id`를 주지 않아 반 **이름**을 쓴다. 반 이름이
+ * 바뀌면 갤러리가 새 파일로 갈라진다. `class_id`가 생기면 이 함수 하나만 고치면
+ * 된다 — 호출부는 전부 이 키를 통해서만 저장소에 접근한다.
  */
-export function galleryKey(className: string): string {
-  return `cls:${className}`;
+export function galleryKey(centerId: number, className: string): string {
+  return `center:${centerId}/cls:${className}`;
 }
 
 // ------------------------------------------------------------------
@@ -79,6 +86,8 @@ export type UseGalleryResult = {
   enroll: (childId: string, embedding: EmbeddingB64) => Promise<void>;
   /** 퇴소 등으로 파기. 저장소에도 반영된다 */
   forget: (childId: string) => Promise<void>;
+  /** 여러 명을 한 번에 파기하고 **한 번만** 저장한다(자동 파기용) */
+  forgetMany: (childIds: string[]) => Promise<void>;
   /** 저장·로드 실패 메시지 */
   error: string | null;
 };
@@ -201,6 +210,14 @@ export function useGallery(classKey: string | null): UseGalleryResult {
     [persist],
   );
 
+  const forgetMany = useCallback(
+    (childIds: string[]) =>
+      persist((g) => {
+        childIds.forEach((id) => g.forget(id));
+      }),
+    [persist],
+  );
+
   return {
     gallery,
     loading,
@@ -211,6 +228,7 @@ export function useGallery(classKey: string | null): UseGalleryResult {
     entries,
     enroll,
     forget,
+    forgetMany,
     error,
   };
 }
