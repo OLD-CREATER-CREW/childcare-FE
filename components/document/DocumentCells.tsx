@@ -74,6 +74,23 @@ export function DocumentCells({
   const emptyCount = aiCells.filter((c) => !valueOf(c).trim()).length;
   const structure = templateQuery.data?.structure ?? null;
 
+  /*
+    서식 원형 칸 중 **내용이 비어 있는 것은 그리지 않는다.**
+
+    실물 주간보육일지에서 `월 / 놀이 평가 및 지원 계획` 같은 라벨은 칸 두 개로
+    나뉜다 — 행 이름을 담은 칸(col 1)과 교사가 쓰는 칸(col 3)이다. 앞쪽은 서버가
+    채우지 않으므로 늘 빈 `template` 칸으로 내려오는데, 이걸 카드로 그리면 35칸짜리
+    문서에서 "비어 있는 칸입니다"만 반복하는 카드가 다섯 장 생겨 정작 읽어야 할
+    칸을 밀어낸다. 교사가 검토할 것도, 고칠 것도 없는 칸이다.
+
+    문안이 **있는** `template` 칸은 남긴다 — 서식에 인쇄된 정형 문구라 완성 문서에
+    그대로 나가므로, 무엇이 실릴지 볼 수 있어야 한다.
+  */
+  const visibleCells = cells.filter(
+    (c) => c.source !== "template" || c.text.trim() !== "",
+  );
+  const hiddenCount = cells.length - visibleCells.length;
+
   return (
     <div className="stack">
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
@@ -84,6 +101,11 @@ export function DocumentCells({
           <span>
             원본 서식 표 {structure.tables.length}개 · 칸{" "}
             {structure.cells.length}개
+          </span>
+        )}
+        {hiddenCount > 0 && (
+          <span title="서식의 행 이름 칸 — 교사가 쓸 내용이 없습니다">
+            · 서식 라벨 칸 {hiddenCount}개는 숨김
           </span>
         )}
         <span className="ml-auto">
@@ -103,7 +125,7 @@ export function DocumentCells({
         </Notice>
       )}
 
-      {cells.map((c) => {
+      {visibleCells.map((c) => {
         const value = valueOf(c);
         const locked = !editable || !c.editable;
         return (
