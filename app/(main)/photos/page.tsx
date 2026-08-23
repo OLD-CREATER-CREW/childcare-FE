@@ -15,10 +15,11 @@
  * 담당: 손승현(ml)
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, ScanFace, ShieldAlert, UserRoundPlus } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useChildRoster } from "@/lib/queries";
+import { useApp } from "@/lib/store";
 import { faceHealth, galleryKey, useGallery } from "@/lib/face";
 import {
   N,
@@ -35,6 +36,7 @@ import { EnrollPanel } from "@/components/face/EnrollPanel";
 type Tab = "classify" | "enroll";
 
 export default function PhotosPage() {
+  const { auth, toast } = useApp();
   const rosterQuery = useChildRoster("enrolled");
   const roster = useMemo(() => rosterQuery.data ?? [], [rosterQuery.data]);
 
@@ -58,7 +60,9 @@ export default function PhotosPage() {
     if (!classNames.includes(className)) setClassName(classNames[0]);
   }, [classNames, className]);
 
-  const classKey = className ? galleryKey(className) : null;
+  // 기관이 확정되기 전에는 갤러리를 열지 않는다 — 키가 달라지면 다른 파일이 된다
+  const classKey =
+    auth && className ? galleryKey(auth.centerId, className) : null;
   const gallery = useGallery(classKey);
 
   const kids = useMemo(
@@ -66,6 +70,45 @@ export default function PhotosPage() {
     [roster, className],
   );
   const enrolledCount = kids.filter((k) => gallery.isEnrolled(k.id)).length;
+
+  /**
+   * 명단에 없는 임베딩을 자동으로 파기한다 (개인정보 즉시 파기 의무).
+   *
+   * 원아를 삭제·퇴소시켜도 서버 명단만 바뀌고 교사 PC 의 갤러리 파일은 그대로
+   * 남는다. 그 아이는 목록에서 사라지므로 화면의 「얼굴 정보 파기」 버튼도 붙지
+   * 않아, 손으로 지울 방법이 없어진다. 그래서 여기서 대조해 정리한다.
+   *
+   * ■ 지우는 것은 되돌릴 수 없다 — 아래 조건을 모두 만족할 때만 지운다
+   *   1. 명단 조회가 성공했을 것 (로딩 중·에러면 아무것도 하지 않는다)
+   *   2. 명단이 비어 있지 않을 것 (빈 명단은 정상이 아니라 사고 신호로 본다)
+   *   3. **기관 전체 재원 명단**과 대조할 것 — 선택한 반(kids)으로 비교하면
+   *      반을 옮긴 아이가 퇴소로 오인되어 삭제된다
+   *   4. 조용히 지우지 않을 것 — 몇 명을 지웠는지 알린다
+   */
+  const purgedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!classKey) return;
+    if (rosterQuery.isLoading || rosterQuery.isError) return; // 조건 1
+    if (roster.length === 0) return; // 조건 2
+    if (gallery.loading) return;
+
+    const enrolled = roster.map((c) => c.id); // 조건 3 — 반이 아니라 기관 전체
+    // 명단이 바뀌면 다시 검사한다(앱을 켜 둔 채 퇴소 처리한 경우)
+    const signature = `${classKey}|${enrolled.slice().sort().join(",")}`;
+    if (purgedRef.current === signature) return;
+    purgedRef.current = signature; // 비동기 전에 먼저 찍어 중복 실행을 막는다
+
+    const known = new Set(enrolled);
+    const orphans = gallery
+      .entries()
+      .map((e) => e.child_id)
+      .filter((id) => !known.has(id));
+    if (orphans.length === 0) return;
+
+    void gallery.forgetMany(orphans).then(() => {
+      toast(`퇴소·삭제된 아이 ${orphans.length}명의 얼굴 정보를 파기했습니다`); // 조건 4
+    });
+  }, [classKey, roster, rosterQuery.isLoading, rosterQuery.isError, gallery, toast]);
 
   // 얼굴인식 서버가 떠 있는지 미리 확인한다 — 사진을 다 고른 뒤에 알게 되면 늦다
   useEffect(() => {
