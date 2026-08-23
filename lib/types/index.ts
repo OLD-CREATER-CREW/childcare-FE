@@ -163,8 +163,8 @@ export type DocumentCell = {
 /**
  * 서식을 등록할 수 있는 문서 종류.
  *
- * 놀이이야기는 빠진다 — 백엔드 `TEMPLATE_DOC_TYPES`에 없다. 상담 요약도
- * 서식 대상이 아니다(기능 명세서 부록 A).
+ * 놀이이야기는 빠진다 — 백엔드 `TEMPLATE_DOC_TYPES`에 없다
+ * (기능 명세서 부록 A).
  */
 export type TemplateDocType = Exclude<DocType, "play_story">;
 
@@ -330,26 +330,6 @@ export type ObservationEntry = {
 export type ObservationData = {
   domains: { name: DevelopmentDomain; count: number }[];
   timeline: ObservationEntry[];
-};
-
-// ---------- 상담 ----------
-
-export type ConsultStatus = "draft" | "confirmed";
-
-export type ConsultSession = {
-  id: string;
-  childId: string;
-  date: string;
-  topic: string;
-  transcript: { speaker: string; text: string }[];
-  summaryDraft: string;
-  summaryFinal: string | null;
-  status: ConsultStatus;
-};
-
-export type ConsultData = {
-  current: ConsultSession | null;
-  history: ConsultSession[];
 };
 
 // ---------- 평가제 체크리스트 ----------

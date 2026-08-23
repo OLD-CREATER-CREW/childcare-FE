@@ -29,7 +29,6 @@ export const queryKeys = {
   noticeQueue: ["documents", "notices", "queue"] as const,
   photos: ["photos"] as const,
   observations: (childId: string) => ["observations", childId] as const,
-  consults: (childId: string) => ["consults", childId] as const,
   checklist: ["checklist"] as const,
   metrics: ["metrics", "summary"] as const,
   settings: ["settings"] as const,
@@ -118,13 +117,6 @@ export const useObservations = (childId: string) =>
   useQuery({
     queryKey: queryKeys.observations(childId),
     queryFn: () => apiFn.fetchObservations(childId),
-    enabled: !!childId,
-  });
-
-export const useConsults = (childId: string) =>
-  useQuery({
-    queryKey: queryKeys.consults(childId),
-    queryFn: () => apiFn.fetchConsults(childId),
     enabled: !!childId,
   });
 
@@ -632,18 +624,6 @@ export const useGenerateAllNotices = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
       qc.invalidateQueries({ queryKey: ["documents", "draft", "notice"] });
-    },
-  });
-};
-
-export const useConfirmConsult = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, summary }: { id: string; summary: string }) =>
-      apiFn.confirmConsult(id, summary),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["consults"] });
-      qc.invalidateQueries({ queryKey: queryKeys.checklist });
     },
   });
 };

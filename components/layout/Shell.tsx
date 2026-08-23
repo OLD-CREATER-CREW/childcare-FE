@@ -16,7 +16,6 @@ import {
   LogOut,
   Mail,
   Menu,
-  Mic,
   Pencil,
   Search,
   Settings,
@@ -79,7 +78,6 @@ const NAV: { group: string; items: NavItem[] }[] = [
         label: "관찰·발달영역",
         scr: "008",
       },
-      { href: "/consults", icon: Mic, label: "상담일지", scr: "010" },
       {
         href: "/evaluations",
         icon: TrendingUp,

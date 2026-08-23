@@ -4,8 +4,6 @@ import type {
   Child,
   ChildProfile,
   ChildProfileInput,
-  ConsultData,
-  ConsultSession,
   DailyRecord,
   DailyRecordInput,
   DevelopmentDomain,
@@ -267,7 +265,6 @@ type DbState = {
   photoSeq: number;
   observations: ObservationEntry[];
   obsSeq: number;
-  consults: ConsultSession[];
   settings: AppSettings;
   /** 로컬 양식(서식) — 지정되면 해당 문서 초안이 이 서식으로 생성된다 */
   templates: Partial<Record<DocType, string>>;
@@ -576,81 +573,6 @@ function seedPhotos(): Photo[] {
   }));
 }
 
-const CONSULT_SEED: Omit<ConsultSession, "id">[] = [
-  {
-    childId: "c01",
-    date: "2026-07-16",
-    topic: "수면 습관",
-    transcript: [
-      {
-        speaker: "어머니",
-        text: "요즘 아이가 밤에 늦게 자서 아침에 일어나기 힘들어해요.",
-      },
-      {
-        speaker: "교사",
-        text: "낮잠 시간에도 잠들기까지 시간이 좀 걸리는 편이에요. 낮잠을 조금 줄여 볼까요?",
-      },
-      {
-        speaker: "어머니",
-        text: "네, 그리고 하원 시간을 30분 당길 수 있을까 해서요.",
-      },
-      {
-        speaker: "교사",
-        text: "네, 2주간 낮잠을 줄여 보고 변화를 지켜본 뒤 다시 말씀 나눠요.",
-      },
-    ],
-    summaryDraft:
-      "핵심 — 수면 습관 변화 상담 (야간 취침 지연 → 기상 어려움)\n요청사항 — 하원 시간 30분 조정, 낮잠 시간 단축 검토\n후속조치 — 2주간 낮잠 단축 시도 후 재상담 (7/30 예정)",
-    summaryFinal: null,
-    status: "draft",
-  },
-  {
-    childId: "c01",
-    date: "2026-05-20",
-    topic: "또래 관계",
-    transcript: [
-      { speaker: "어머니", text: "친구들과 잘 지내는지 궁금해서요." },
-      {
-        speaker: "교사",
-        text: "특정 친구와 놀이 시간이 길어지고 있고, 갈등 시 말로 해결하려는 시도가 늘었어요.",
-      },
-    ],
-    summaryDraft: "",
-    summaryFinal:
-      "핵심 — 또래 관계 적응 점검\n요청사항 — 갈등 상황 대처 방식 공유\n후속조치 — 가정에서도 감정 표현 어휘 사용 독려",
-    status: "confirmed",
-  },
-  {
-    childId: "c01",
-    date: "2026-03-11",
-    topic: "적응 상담",
-    transcript: [
-      { speaker: "어머니", text: "새 학기 적응이 걱정돼요." },
-      { speaker: "교사", text: "첫 주보다 등원 시 분리가 훨씬 안정적이에요." },
-    ],
-    summaryDraft: "",
-    summaryFinal:
-      "핵심 — 신학기 적응 상담\n요청사항 — 등원 시 분리불안 관찰 요청\n후속조치 — 2주 후 적응도 재공유",
-    status: "confirmed",
-  },
-  {
-    childId: "c02",
-    date: "2026-06-02",
-    topic: "식습관",
-    transcript: [
-      { speaker: "아버지", text: "집에서 채소를 잘 안 먹으려고 해요." },
-      {
-        speaker: "교사",
-        text: "원에서는 또래와 함께라 조금씩 시도하고 있어요. 같은 방식 공유드릴게요.",
-      },
-    ],
-    summaryDraft: "",
-    summaryFinal:
-      "핵심 — 채소 편식 상담\n요청사항 — 원 식사 지도 방식 공유\n후속조치 — 가정 연계 식판 스티커판 제공",
-    status: "confirmed",
-  },
-];
-
 /**
  * 주간 계획안 초안을 시드로 심는다.
  * planContent()가 state.templates를 읽으므로, 반드시 state가 할당된 뒤에 호출해야 한다
@@ -740,7 +662,6 @@ function createState(): DbState {
     photoSeq: 100,
     observations: seedObservations(),
     obsSeq: 100,
-    consults: CONSULT_SEED.map((c, i) => ({ ...c, id: `cs${i + 1}` })),
     settings: {
       replayMode: false,
       models: { generate: "Sonnet 5", light: "Haiku 4.5" },
@@ -1603,26 +1524,6 @@ export function addObservation(
   return entry;
 }
 
-// ---------- 상담 ----------
-
-export function getConsults(childId: string): ConsultData {
-  const sessions = state.consults
-    .filter((c) => c.childId === childId)
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-  return {
-    current: sessions.find((s) => s.status === "draft") ?? sessions[0] ?? null,
-    history: sessions,
-  };
-}
-
-export function confirmConsult(id: string, summary: string): boolean {
-  const session = state.consults.find((c) => c.id === id);
-  if (!session || session.status !== "draft") return false;
-  session.summaryFinal = summary;
-  session.status = "confirmed";
-  return true;
-}
-
 // ---------- 평가제 체크리스트 (규칙엔진 — 조회 시 실데이터 재집계) ----------
 
 export function getChecklist(): ChecklistData {
@@ -1639,10 +1540,6 @@ export function getChecklist(): ChecklistData {
   const missingObservations = state.children
     .filter((c) => !recentObsChildIds.has(c.id))
     .map((c) => c.name);
-  const consultCount = state.consults.filter(
-    (c) => c.status === "confirmed" && c.date >= "2026-04-01",
-  ).length;
-
   const items = [
     {
       id: "journal",
@@ -1676,15 +1573,6 @@ export function getChecklist(): ChecklistData {
         missingObservations.length === 0
           ? "이번 달 전원 작성"
           : `${missingObservations.length}명 미작성`,
-    },
-    {
-      id: "consult",
-      ok: consultCount > 0,
-      title: "상담일지 (분기 1회)",
-      desc:
-        consultCount > 0
-          ? `이번 분기 확정 상담 ${consultCount}건`
-          : "이번 분기 상담 기록 0건",
     },
   ];
   return {

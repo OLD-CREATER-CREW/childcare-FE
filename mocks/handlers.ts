@@ -2,24 +2,19 @@ import { http, HttpResponse, delay } from "msw";
 import * as db from "@/mocks/db";
 import {
   childIdToInt,
-  consultIdToInt,
   decodeSpecRecord,
   docTypeFromSpec,
   domainFromSpec,
   domainToSpec,
   intToChildId,
-  intToConsultId,
   intToRecordId,
   intToUserId,
   recordIdToInt,
   userIdToInt,
-  summaryFromSpec,
-  summaryToSpec,
 } from "@/lib/api/spec";
 import type {
   SpecChild,
   SpecChildDetail,
-  SpecConsult,
   SpecDocType,
   SpecDocument,
   SpecDocumentCell,
@@ -32,7 +27,6 @@ import type {
 import type {
   Child,
   ChildProfile,
-  ConsultSession,
   DailyRecord,
   DocType,
   DocumentCell,
@@ -214,19 +208,6 @@ function specPhoto(p: Photo): SpecPhoto {
     sent_at: p.sent ? `${db.TODAY}T17:10:00+09:00` : null,
     icon: p.icon,
     taken_at: p.takenAt,
-  };
-}
-
-function specConsult(s: ConsultSession): SpecConsult {
-  return {
-    consult_id: consultIdToInt(s.id),
-    child_id: childIdToInt(s.childId),
-    created_at: `${s.date}T15:00:00+09:00`,
-    status: s.status === "confirmed" ? "confirmed" : "draft",
-    summary_draft: s.summaryDraft || null,
-    summary_final: s.summaryFinal ? summaryToSpec(s.summaryFinal) : null,
-    topic: s.topic,
-    transcript: s.transcript,
   };
 }
 
@@ -673,33 +654,6 @@ export const handlers = [
       );
     },
   ),
-
-  // ===== 상담 (EP-006 조회 / EP-025 확정) =====
-  http.get("/api/children/:childId/consults", async ({ params }) => {
-    await delay(300);
-    const childId = intToChildId(Number(params.childId));
-    if (!db.getChild(childId))
-      return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    const { history } = db.getConsults(childId);
-    const items = history.map(specConsult);
-    return HttpResponse.json({
-      child_id: Number(params.childId),
-      items,
-      total: items.length,
-    });
-  }),
-
-  http.post("/api/consults/:consultId/confirm", async ({ params, request }) => {
-    await delay(420);
-    const uiId = intToConsultId(Number(params.consultId));
-    const body = (await request.json()) as {
-      summary_final: { core: string; requests: string; follow_up: string };
-    };
-    const ok = db.confirmConsult(uiId, summaryFromSpec(body.summary_final));
-    if (!ok) return err(409, "NO_SUMMARY", "먼저 요약 초안을 만들어 주세요.");
-    const session = db.state.consults.find((c) => c.id === uiId)!;
-    return HttpResponse.json(specConsult(session));
-  }),
 
   // ===== 하루 기록 (EP-007 저장 / EP-008 조회 / EP-009 태그) =====
   http.get("/api/records", async ({ request }) => {

@@ -81,10 +81,10 @@ export const docTypeFromSpec = (t: SpecDocType): DocType =>
 
 // ---------- ID 브리지 (UI 문자열 ↔ 명세 정수) ----------
 //
-// UI는 아동·관찰(기록)·상담을 접두 문자열 키("c13"·"o68"·"cs3")로 다루고,
+// UI는 아동·관찰(기록)을 접두 문자열 키("c13"·"o68")로 다루고,
 // 와이어는 정수 ID를 쓴다. 실 백엔드가 부여하는 정수 값은 예측할 수 없으므로
 // (예: child_id가 13부터 시작) 오프셋을 두지 않고 **무손실 왕복**만 보장한다:
-// 접두 문자(c/o/cs)는 표현용이고, 정수 값은 그대로 왕복한다.
+// 접두 문자(c/o)는 표현용이고, 정수 값은 그대로 왕복한다.
 //   intToChildId(13) → "c13" → childIdToInt("c13") → 13
 
 export const childIdToInt = (id: string): number =>
@@ -100,10 +100,6 @@ export const intToUserId = (n: number): string => `u${n}`;
 export const recordIdToInt = (id: string): number =>
   Number(id.replace(/\D/g, ""));
 export const intToRecordId = (n: number): string => `o${n}`;
-
-export const consultIdToInt = (id: string): number =>
-  Number(id.replace(/\D/g, ""));
-export const intToConsultId = (n: number): string => `cs${n}`;
 
 // ---------- 와이어 응답 타입 ----------
 
@@ -320,7 +316,7 @@ export type SpecDocumentListItem = {
 //
 // 템플릿을 다루는 문서 타입은 5종이다 — `play_story`는 빠진다.
 // 백엔드 `TEMPLATE_DOC_TYPES`(= `document_types.DOCUMENT_TYPES`)에 놀이이야기가
-// 없고, `consult_summary`도 서식 대상이 아니다(기능 명세서 부록 A).
+// 없다(기능 명세서 부록 A).
 
 export type SpecTemplateDocType = Exclude<SpecDocType, "play_story">;
 
@@ -422,25 +418,6 @@ export type SpecPhoto = {
 };
 
 export type SpecPhotoList = SpecList<SpecPhoto> & { pending: number };
-
-/** EP-006 상담 */
-export type SpecConsultSummary = {
-  core: string;
-  requests: string;
-  follow_up: string;
-};
-
-export type SpecConsult = {
-  consult_id: number;
-  child_id?: number;
-  created_at: string;
-  status: "transcribing" | "summarizing" | "draft" | "confirmed" | "stt_failed";
-  summary_draft?: string | null;
-  summary_final?: SpecConsultSummary | null;
-  // --- 목 부가(화면 표시) ---
-  topic?: string;
-  transcript?: { speaker: string; text: string }[];
-};
 
 /** EP-026 평가제 체크리스트 */
 export type SpecChecklistItem = {
@@ -577,24 +554,4 @@ export function decodeSpecRecord(spec: Partial<RecordWireFields>): {
     mealParsed: meal !== null,
     napParsed: nap !== null,
   };
-}
-
-// ---------- 상담 요약 3단 구조(명세 EP-006/025) ----------
-
-/** UI는 요약을 한 문자열로 다루고, 명세는 core·requests·follow_up 3키 객체다. */
-export function summaryToSpec(text: string): SpecConsultSummary {
-  const pick = (label: string) => {
-    const m = new RegExp(`${label}\\s*[—-]\\s*(.+)`).exec(text);
-    return m?.[1]?.trim() ?? "";
-  };
-  const core = pick("핵심");
-  return {
-    core: core || text.trim(),
-    requests: pick("요청사항"),
-    follow_up: pick("후속조치"),
-  };
-}
-
-export function summaryFromSpec(s: SpecConsultSummary): string {
-  return `핵심 — ${s.core}\n요청사항 — ${s.requests}\n후속조치 — ${s.follow_up}`;
 }

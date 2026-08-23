@@ -7,7 +7,6 @@ import {
 import type { DownloadedFile, ListEnvelope } from "@/lib/api/client";
 import {
   childIdToInt,
-  consultIdToInt,
   decodeSpecRecord,
   docTypeFromSpec,
   docTypeToSpec,
@@ -15,12 +14,9 @@ import {
   domainToSpec,
   encodeRecordToSpec,
   intToChildId,
-  intToConsultId,
   intToRecordId,
   intToUserId,
   recordIdToInt,
-  summaryFromSpec,
-  summaryToSpec,
   userIdToInt,
 } from "@/lib/api/spec";
 import type {
@@ -35,7 +31,6 @@ import type {
   SpecStructureMeta,
   SpecChecklist,
   SpecChild,
-  SpecConsult,
   SpecDocType,
   SpecDocument,
   SpecDocumentListItem,
@@ -68,8 +63,6 @@ import type {
   ChildProfile,
   ChildProfileInput,
   ChildStatus,
-  ConsultData,
-  ConsultSession,
   DailyRecord,
   DailyRecordInput,
   DevelopmentDomain,
@@ -1154,42 +1147,6 @@ export const addObservation = async (
     manualTag: edited,
     memo: rec.note ?? memo,
   };
-};
-
-// ---------- 상담 (EP-006 조회 / EP-025 확정) ----------
-
-function mapConsult(c: SpecConsult, childId: string): ConsultSession {
-  return {
-    id: intToConsultId(c.consult_id),
-    childId,
-    date: c.created_at.slice(0, 10),
-    topic: c.topic ?? "",
-    transcript: c.transcript ?? [],
-    summaryDraft: c.summary_draft ?? "",
-    summaryFinal: c.summary_final ? summaryFromSpec(c.summary_final) : null,
-    status: c.status === "confirmed" ? "confirmed" : "draft",
-  };
-}
-
-export const fetchConsults = async (childId: string): Promise<ConsultData> => {
-  const list = await api.get<ListEnvelope<SpecConsult>>(
-    `/children/${childIdToInt(childId)}/consults`,
-  );
-  const sessions = list.items.map((c) => mapConsult(c, childId));
-  return {
-    current: sessions.find((s) => s.status === "draft") ?? sessions[0] ?? null,
-    history: sessions,
-  };
-};
-
-export const confirmConsult = async (
-  id: string,
-  summary: string,
-): Promise<{ ok: boolean }> => {
-  await api.post(`/consults/${consultIdToInt(id)}/confirm`, {
-    summary_final: summaryToSpec(summary),
-  });
-  return { ok: true };
 };
 
 // ---------- 평가제 체크리스트 (EP-026) ----------
