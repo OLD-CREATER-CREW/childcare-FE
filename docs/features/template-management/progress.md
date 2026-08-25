@@ -13,18 +13,18 @@
 백엔드 `feat/template-driven-draft`가 서식을 원본 그대로 채워 내려주는데 **사람이
 쓸 화면이 없었다.** SCR-015를 만들고, 문서 화면에 완성 파일과 칸 단위 검토를 붙였다.
 
-| 계층 | 파일 |
-|---|---|
-| 계약 | `lib/api/spec.ts` — `SpecTemplate`·`SpecStructureMeta`(v2)·`SpecDocumentCell`·`SpecRenderFile`, `SpecDocument`에 `template_id`·`cells`·`file_key`·`file_render_status` |
-| 전송 | `lib/api/client.ts` — `rawRequest` 분리 + `api.getFile`(바이너리 · `Content-Disposition` 파싱) |
-| UI 타입 | `lib/types/index.ts` — `FormTemplate`·`TemplateStructure`·`TemplateCell`·`DocumentCell`·`FileRenderStatus` |
-| seam | `lib/api/index.ts` — EP-032~035·037·052, EP-036·038, `saveDocumentCells` |
-| 훅 | `lib/queries/index.ts` — 템플릿·활성 템플릿·문서 파일·칸 저장 |
-| 화면 | `app/(main)/templates/page.tsx` **(신규)** |
-| 화면 | `components/document/DocumentCells.tsx` **(신규)** · `DocumentFileBar.tsx` **(신규)** |
-| 화면 | `components/document/DocumentWorkbench.tsx` — 칸/평문 전환 · 진행 표시 · 503 갈래 |
-| 내비 | `components/layout/Shell.tsx` — 「양식 관리」(운영 그룹, SCR-015) |
-| 목 | `mocks/db.ts`·`mocks/handlers.ts` — 실계약과 같은 모양 |
+| 계층    | 파일                                                                                                                                                                   |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 계약    | `lib/api/spec.ts` — `SpecTemplate`·`SpecStructureMeta`(v2)·`SpecDocumentCell`·`SpecRenderFile`, `SpecDocument`에 `template_id`·`cells`·`file_key`·`file_render_status` |
+| 전송    | `lib/api/client.ts` — `rawRequest` 분리 + `api.getFile`(바이너리 · `Content-Disposition` 파싱)                                                                         |
+| UI 타입 | `lib/types/index.ts` — `FormTemplate`·`TemplateStructure`·`TemplateCell`·`DocumentCell`·`FileRenderStatus`                                                             |
+| seam    | `lib/api/index.ts` — EP-032~035·037·052, EP-036·038, `saveDocumentCells`                                                                                               |
+| 훅      | `lib/queries/index.ts` — 템플릿·활성 템플릿·문서 파일·칸 저장                                                                                                          |
+| 화면    | `app/(main)/templates/page.tsx` **(신규)**                                                                                                                             |
+| 화면    | `components/document/DocumentCells.tsx` **(신규)** · `DocumentFileBar.tsx` **(신규)**                                                                                  |
+| 화면    | `components/document/DocumentWorkbench.tsx` — 칸/평문 전환 · 진행 표시 · 503 갈래                                                                                      |
+| 내비    | `components/layout/Shell.tsx` — 「양식 관리」(운영 그룹, SCR-015)                                                                                                      |
+| 목      | `mocks/db.ts`·`mocks/handlers.ts` — 실계약과 같은 모양                                                                                                                 |
 
 ### 결정 로그
 
@@ -108,12 +108,12 @@ Notice는 내용을 `<div>` 하나로 감쌌다. **기존 화면에도 같은 �
 
 `DocumentFileBar`를 문서 상태 × 파일 종류 **네 갈래**로 다시 짰다.
 
-| 문서 상태 | 파일 | 화면 |
-|---|---|---|
-| `draft` | `_preview` | 「초안 한글 파일(.hwpx) 내려받기」 + 초안임을 명시 |
-| `draft` | 없음 | 서식은 있는데 파일이 없다는 안내(만들기는 409라 막는다) |
-| `confirmed`·`sent` | `_preview` | **경고** + 「확정본 파일 만들기」가 주 동작 |
-| `confirmed`·`sent` | `_final` | 「내려받기」가 주 동작, 「다시 만들기」는 서식 교체용 |
+| 문서 상태          | 파일       | 화면                                                    |
+| ------------------ | ---------- | ------------------------------------------------------- |
+| `draft`            | `_preview` | 「초안 한글 파일(.hwpx) 내려받기」 + 초안임을 명시      |
+| `draft`            | 없음       | 서식은 있는데 파일이 없다는 안내(만들기는 409라 막는다) |
+| `confirmed`·`sent` | `_preview` | **경고** + 「확정본 파일 만들기」가 주 동작             |
+| `confirmed`·`sent` | `_final`   | 「내려받기」가 주 동작, 「다시 만들기」는 서식 교체용   |
 
 - **확정 직후에도 파일은 `_preview` 그대로다.** 여기서 「내려받기」만 내밀면
   파일명에 `초안`이 붙은 파일을 확정본으로 믿고 제출하게 된다. 그래서 확정 후
@@ -166,3 +166,262 @@ Notice는 내용을 `<div>` 하나로 감쌌다. **기존 화면에도 같은 �
   있다. 기존 평문 편집도 같은 성질이라 이번에는 맞추기만 했다 — 확정 전 플러시 필요
 - 실물 서식 11칸 생성(2~5분)은 `LLM_PROVIDER=mock`으로 검증해 실모델 소요·빈 칸
   발생률은 확인하지 못했다. 실모델 1회 확인 권장
+
+---
+
+## 2026-08-24 — 보육일지: 서식을 프론트가 직접 읽고 채워 한글 파일로 돌려준다
+
+### 계기
+
+보육일지 화면에서 「양식 하나 올리고 → 한글 파일 받기」가 **화면상 보이지 않았다.**
+원인은 둘이었다.
+
+1. 서식 업로드가 SCR-015(양식 관리)에만 있어, 일지를 쓰다가 우리 원 양식으로
+   나오게 하려면 다른 화면까지 다녀와야 했다.
+2. 목이 서식 파일을 열지 못해 활성 서식이 **하나도 없었고**, 그래서 `DocumentFileBar`가
+   확정 전 갈래에서 `null`을 돌려줬다 — 기능은 붙어 있는데 자리 자체가 없었다.
+
+또 목의 칸 구조는 라벨 7개짜리 흉내였다. 실물 서식(29행 9열, 병합 얽힘)과 모양이
+달라 "칸이 넘치는지, 요일별로 제자리에 들어갔는지"를 화면에서 확인할 수 없었다.
+
+### 바꾼 것
+
+| 계층      | 파일                                                     | 내용                                                                                                             |
+| --------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 서식 해석 | `lib/hwpx/zip.ts` **(신규)**                             | 최소 ZIP 리더·라이터. 브라우저 내장 `DecompressionStream/CompressionStream('deflate-raw')`만 쓴다 — **의존성 0** |
+| 서식 해석 | `lib/hwpx/index.ts` **(신규)**                           | `analyzeHwpx()` 표·병합·라벨·채울 칸 추출, `fillHwpx()` 원본 서식에 칸 값 주입                                   |
+| 목 데이터 | `mocks/journal-sample.ts` **(신규)**                     | 백엔드 생성 파이프라인이 이 서식으로 실제 뽑은 문안 22칸(`8월 1주_생성_생성텍스트.json`)                         |
+| 견본 서식 | `public/samples/journal-weekly-sample.hwpx` **(신규)**   | `ChildCare-BE/sample/0823test/8월 1주.hwpx`                                                                      |
+| 목        | `mocks/db.ts`                                            | 업로드된 .hwpx **실제 분석**, 견본 서식 자동 등록·활성화, 생성 시 `_preview` 파일 부여, `documentFileBytes()`    |
+| 목        | `mocks/handlers.ts`                                      | EP-032 실제 파싱(실패 시 422), EP-036이 **진짜 .hwpx 바이트** 반환                                               |
+| 화면      | `components/document/DocumentTemplateBar.tsx` **(신규)** | 문서 위 서식 줄 — 올리기 · 이 서식 쓰기 · 한글 파일 내려받기                                                     |
+| 화면      | `components/document/DocumentWorkbench.tsx`              | `topSlot` 추가, 위에서 내려받기를 내주면 하단 초안 카드는 접음                                                   |
+| 화면      | `components/document/DocumentCells.tsx`                  | 서식 인쇄 문구 칸은 접어 둠(69칸 중 22칸만 검토 대상)                                                            |
+| 화면      | `app/(main)/journal/page.tsx`                            | 서식 줄을 맨 위에 배치                                                                                           |
+
+### 결정 로그
+
+**1. 서식 파싱을 프론트에서 한다.** 목이 "브라우저는 .hwpx를 열 수 없다"는 전제로
+칸을 흉내 내고 있었는데, 그 전제가 이제 틀리다 — hwpx는 XML을 담은 ZIP이고,
+ZIP의 압축 방식(deflate)은 브라우저에 이미 있다. 필요한 것은 헤더를 읽고 쓰는
+100여 줄뿐이라 라이브러리를 넣지 않았다.
+
+**2. 채울 칸 규칙을 백엔드 결과와 맞춰 검증했다.** 라벨(`행 이름 / 열 이름`)이
+`실내놀이·바깥놀이·실내대체·평가·특이사항`에 걸리는 내용 칸만 채운다. 같은 서식을
+백엔드가 분석해 채운 22칸과 **키·라벨이 전부 일치**한다(아래 검증). 목에서만
+통하는 키를 만들지 않기 위한 기준선이다.
+
+**3. 모델 문안은 지어내지 않고 재생한다.** 브라우저에 모델 키가 없으므로, 이
+서식으로 실제 파이프라인을 돌려 나온 출력을 칸 키에 맞춰 넣는다. 화면이 검증할
+것은 문장 품질이 아니라 어느 칸이 채워지고 어느 칸이 서식 문구로 남는가다.
+
+**4. 서식 문구 칸은 접는다.** 실물 서식은 69칸인데 교사가 볼 것은 22칸이다.
+문서 순서대로 늘어놓으면 검토할 칸이 40여 장의 카드 사이에 흩어져,
+검토 범위를 좁히려고 붙인 `source` 표식이 화면에서는 아무것도 좁혀 주지 못했다.
+
+**5. 올리는 것과 쓰는 것은 여전히 다른 동작이다.** 문서 화면에서도 업로드는 등록
+(EP-032)일 뿐이고, 칸 수를 확인한 뒤 「이 서식 쓰기」(EP-037)를 눌러야 바뀐다.
+
+**6. 문서 이름표는 서식이 정한다.** 주간보육일지 서식(요일별 칸)이 활성이면
+`주간보육일지 (2026-08-24 ~ 08-28)`로 이름 붙는다 — 파일명이 「8월 24일 보육일지」인데
+안에 한 주가 들어 있는 일을 막는다.
+
+### 검증
+
+`lib/hwpx`를 Node에서 그대로 실행해(@xmldom/xmldom로 DOMParser 주입) 확인했다.
+
+- 분석: 표 2개 · 칸 69개 · 채울 칸 22개 — 백엔드 `생성_칸` 22개와 **키 100% 일치,
+  라벨 불일치 0건**
+- 채움: 원본과 **항목 순서·압축 방식 동일**, 본문 XML 외 11개 항목은 **바이트 동일**,
+  `mimetype: application/hwp+zip` 보존, 22칸 문안 전부 주입, 등원·특별활동 등
+  서식 문구 그대로
+- 목 계층 통과: 견본 서식 자동 등록·활성 → 초안 69칸(AI 22 · 서식 문구 47, 빈 칸 0)
+  → 교사가 고친 칸이 완성 파일에 반영됨 → 84KB .hwpx
+- `tsc` · `next build` · `lint` 통과
+
+### 후속 작업
+
+- .docx 서식은 여전히 라벨 흉내다. `word/document.xml`도 같은 ZIP 구조라
+  `lib/hwpx`의 리더를 재사용할 수 있다.
+- 칸 분량 예산(`budgetChars`)은 칸 크기로 어림한다. 실서버는 글꼴 크기까지 보므로
+  값이 다르다 — 넘침 경고를 화면에 띄우려면 기준을 맞춰야 한다.
+- 워크벤치 왼쪽 「원천 기록」 패널은 아직 **하루 기록 요약**이다. 주간 서식으로
+  생성한 문안(요일별 기록)과 짝이 맞지 않는다 — 주간 원천을 내려주는 경로 필요.
+
+---
+
+### Commit — 2026-08-24 00:15
+
+- Hash: `248744e`
+- Message: `Feat:#14 상담일지(SCR-010) 기능 제거`
+- Issue: `#14`
+
+**변경 요약**
+
+- 상담일지 화면(`app/(main)/consults`)과 Shell 네비게이션 항목을 삭제하고, 딸린
+  타입(`ConsultSession`·`ConsultData`)·훅(`useConsults`·`useConfirmConsult`)·
+  seam 계약(`SpecConsult`, `cs` 접두 ID 브리지, 3단 요약 변환기)·목 데이터
+  (시드 4건, `state.consults`, EP-006/EP-025 핸들러)를 함께 걷어냈다.
+- 평가제 체크리스트의 「상담일지 (분기 1회)」 항목 제거 — 총점 5 → 4.
+
+**결정 로그**
+
+- 체크리스트 항목을 남기지 않았다. 집계 소스인 `state.consults`가 사라지면 항상
+  0건이라, 절대 만족할 수 없는 항목이 화면에 남는 편이 더 나쁘다. 화면은
+  `data.total`을 그대로 쓰므로 총점 변화는 자동으로 반영된다.
+- 진행 중이던 hwpx 작업과 같은 파일(`mocks/db.ts`·`mocks/handlers.ts`)에 섞여
+  있었으나, HEAD 기준으로 상담 제거만 적용한 내용을 index에 올려 **상담 제거만**
+  커밋했다. hwpx 작업은 작업트리에 그대로 남아 있다.
+- 이슈는 `Refs #14`로 참조만 했다 — #14(양식 템플릿 관리)와 주제가 다르므로
+  `Closes`를 쓰지 않았다.
+
+**검증**
+
+- 커밋될 트리만 별도 worktree로 재현해 `tsc --noEmit` 통과(exit 0) — 목 핸들러와
+  타입이 함께 빠졌는지 확인하기 위해서다.
+- 작업트리 기준 `npm run type-check` · `next lint` · `next build` 통과
+  (라우트 18개, `/consults` 사라진 것 확인).
+
+**다음 작업**
+
+- 없음 (상담일지 제거는 이 커밋으로 완결).
+
+---
+
+### 작업 — 2026-08-24 (미커밋)
+
+**보육일지(SCR-006) 날짜 선택**
+
+**변경 요약**
+
+- 보육일지 화면에 하루 기록(SCR-003)과 같은 날짜 선택(최근 2주)을 붙였다. 고른
+  날짜는 조회(EP-012 `date`)·생성(EP-010 `date`)·작업본 저장(EP-013)·확정
+  (EP-014)·파일 만들기/내려받기(EP-038·036)까지 한 줄로 따라간다.
+- 날짜 선택지·`dateLabel()`을 `lib/constants.ts`로 올리고, 하루 기록 화면의
+  로컬 `DATE_OPTIONS` 중복을 제거했다.
+- seam(`lib/api/index.ts`)의 문서 함수와 쿼리 훅에 선택 인자 `date`를 붙였다.
+  안 넘기면 예전과 같은 동작이라, 다른 문서 화면은 손대지 않았다.
+- 목: 문서 키를 `journal`만 `journal:class:{date}`로 늘렸다. `resolveDocId`는
+  날짜까지 역해소하고, EP-012 목록은 `date`로 거른다.
+
+**결정 로그**
+
+- **날짜를 워크벤치 전체에 흘린다.** 화면 문구만 바꾸고 요청은 오늘로 두면, 8월
+  20일을 골라 놓고 오늘 일지를 고치는 상태가 된다. 문서를 가르는 값이라 조회부터
+  파일까지 같은 날짜여야 한다.
+- **키에 날짜를 넣는 것은 보육일지만.** 알림장도 하루치지만 날짜를 고르는 화면이
+  없다. 키를 늘리면 알림장 대기열·체크리스트가 참조하는 키가 전부 어긋난다.
+- **날짜 없는 보육일지 키를 만들지 않는다.** 목의 `docKey`는 날짜가 없으면
+  오늘로 채운다. `journal:class`와 `journal:class:{오늘}`이 공존하면 같은 날
+  일지가 둘이 되어, 화면이 고치는 문서와 체크리스트가 세는 문서가 갈린다.
+- **지난 날짜에는 「출결」 줄을 감춘다.** 출결은 지금 등원 상태라 어제 화면에
+  오늘 숫자를 얹으면 사실이 아닌 값이 일지 원천으로 보인다. 「하루 기록」 줄은
+  날짜별 조회(EP-008)라 그대로 둔다 — 원천 요약이 `useRecordSummary`(오늘 고정)
+  에서 `useDayRecordedIds(date)`로 바뀌었다.
+
+**검증**
+
+- `npm run type-check` · `next lint` · `next build` 통과(라우트 18개).
+- `next dev`에서 `/journal` 컴파일 확인. 화면 조작 검증은 아직 안 했다.
+
+**다음 작업**
+
+- 브라우저에서 날짜를 바꿔 가며 생성·수정·확정·내려받기가 각각 그 날짜 문서로
+  가는지 확인.
+- 목 시드는 하루 기록이 **오늘치만** 있다. 지난 날짜를 고르면 원천이 0건이라
+  일지 문안이 비게 된다 — 시연용으로 지난 며칠치 기록 시드가 필요한지 판단.
+
+---
+
+## 2026-08-24 — 등록 서식 파일명 표시 · 원본 파일 열기 (SCR-015 후속)
+
+### 계기
+
+"지금 양식이 무엇을 올렸었는지 정확히 확인할 수 없다"는 지적. 확인해 보니
+`FormTemplate`에는 원본 파일명이 아예 없었다 — `fileKey`는 서버가 매긴 저장
+키(`center3/templates/501_source.docx`)일 뿐 사람이 올린 파일명이 아니고,
+서식 원본 파일은 애초에 "완성 문서를 만들 때만 쓰고 화면으로 나가지 않는다"는
+전제로 설계돼 다운로드 경로 자체가 없었다.
+
+### 바꾼 것
+
+| 계층    | 파일                            | 내용                                                                                                                           |
+| ------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 계약    | `lib/api/spec.ts`               | `SpecTemplate`·`SpecTemplateListItem`에 `file_name` 추가(명세에 없는 필드 — 주석에 표시)                                       |
+| UI 타입 | `lib/types/index.ts`            | `FormTemplate.fileName` 추가                                                                                                   |
+| seam    | `lib/api/index.ts`              | `mapTemplate`·`fetchTemplates`에 `fileName` 매핑, `downloadTemplateFile()` 신설                                                |
+| 훅      | `lib/queries/index.ts`          | `useDownloadTemplateFile`                                                                                                      |
+| 목      | `mocks/db.ts`                   | `FormTemplate.fileName` 저장, `templateRawFiles` 맵(분석 성공 여부와 무관하게 업로드 원본 바이트 보관), `getTemplateRawFile()` |
+| 목      | `mocks/handlers.ts`             | `specTemplate`·EP-033 목록에 `file_name`, `GET /api/templates/{id}/file` 신설(명세에 없는 확장)                                |
+| 화면    | `app/(main)/templates/page.tsx` | 활성 서식 줄·구조 분석 미리보기 카드·등록 이력 표 세 곳에 파일명 표시 + 클릭 시 원본 다운로드                                  |
+
+### 결정 로그
+
+**1. 채움용 바이트(`templateSource`)와 원본 보관용 바이트(`templateRawFiles`)를 분리했다.**
+`templateSource`는 hwpx 채움 로직 전용이고 `buildDocumentCells`가 "이 값이 있으면
+실제로 읽은 서식"으로 판단해 채울 칸 기준을 가른다. 원본 다운로드용으로 .docx나
+분석 실패 서식까지 같은 맵에 채우면 그 판단 기준이 깨진다 — 그래서 별도 맵을
+두어 기존 채움 로직은 한 줄도 건드리지 않았다.
+
+**2. 분석에 실패해도 원본은 남긴다.** "무엇을 올렸는지 확인"이 필요한 순간은
+오히려 분석이 실패했을 때(왜 실패했는지 한글에서 열어 봐야 알 수 있다)라, 목의
+POST 핸들러가 모든 갈래(성공·`TEMPLATE_ANALYSIS_FAILED`)에서 원본 바이트를
+`rawBytes`로 넘긴다. 다만 415로 즉시 반려되는 두 갈래(`UNSUPPORTED_TEMPLATE_FILE`·
+`HWP_NEEDS_CONVERSION`)는 애초에 행 자체가 안 남으므로 대상이 아니다.
+
+**3. `file_name`·원본 다운로드 엔드포인트는 명세에 없다.** 백엔드에 필드·엔드포인트
+추가를 요청해야 실제 배포본에서 동작한다(아래 "백엔드에 보고할 것" 참고). 그 전까지는
+목 모드(`NEXT_PUBLIC_USE_MOCK=true`)에서만 동작한다 — 실 배포 주소
+(`NEXT_PUBLIC_API_BASE_URL=https://api.child-care.site`)로 붙으면 파일명 칸이
+빈 채로 온다(검증 중 실제로 확인했다).
+
+### 검증
+
+- `tsc --noEmit` · `next lint` · `next build`(18 라우트) 통과
+- 목 모드로 `next dev` 실행 후 Playwright로 실제 클릭까지 확인
+  (`NEXT_PUBLIC_USE_MOCK=true NEXT_PUBLIC_API_BASE_URL=`로 임시 재기동 — 기본값은
+  실 서버라 목이 안 걸린다):
+  - 활성 서식 줄 · 구조 분석 미리보기 카드("원본 파일 열기 — 주간보육일지_8월1주.hwpx")
+  - 등록 이력 표의 파일명 버튼
+  - 세 지점 모두 클릭 시 `주간보육일지_8월1주.hwpx`(89,091 bytes, `PK\x03\x04` ZIP
+    시그니처, `application/hwp+zip`)가 그대로 내려받힘 확인
+  - 콘솔 오류 0건
+
+### 백엔드에 보고할 것
+
+- `SpecTemplate`·`SpecTemplateListItem` 응답(EP-032·033·034)에 `file_name`
+  (사람이 올린 원본 파일명) 필드 추가 요청
+- `GET /api/templates/{template_id}/file` 신설 요청 — EP-036과 같은 바이너리
+  스트림 방식으로, **채워진 결과가 아니라 업로드된 원본**을 그대로 돌려줘야 한다
+
+### 다음 작업
+
+- 위 두 항목이 실제 백엔드에 반영되면 목과의 동작 차이가 사라진다 — 그 전까지
+  실 서버 연동 시 파일명·원본 열기가 비어 보이는 것은 알려진 제약이다.
+
+### 후속 수정 — `undefined` 노출 방어 (같은 날)
+
+실 서버(옛 배포본, `file_name` 없음)로 화면을 켜 보니 "원본 파일 열기 —
+undefined"가 그대로 찍혔다. 타입이 `file_name: string`(항상 있음)으로 단정하고
+있어 없을 때를 방어하지 않았던 것 — 실제로 값이 없을 수 있는 필드를 있다고
+선언한 게 원인이다.
+
+- `SpecTemplate.file_name`·`SpecTemplateListItem.file_name`을 `?`로 정정
+- `mapTemplate`·`fetchTemplates`가 `t.file_name ?? ""`로 매핑(빈 문자열이 "없음")
+- 화면 세 지점(활성 서식 줄·미리보기 카드·등록 이력 표) 모두 `fileName`이
+  falsy면 버튼을 그리지 않는다 — 등록 이력 표는 버튼 대신 "파일명 확인 불가" 표시
+- `tsc` · `lint` · `build` 재확인 통과
+
+### 후속 — 보육일지 문서 이름표를 `보육일지_MMDD`로 (같은 날)
+
+문서 이름표(`getDraft`의 `label` — 화면 표시와 다운로드 파일명을 겸한다)가
+`{CLASS_NAME} · {day} 보육일지`처럼 길었다. `보육일지_MMDD`로 짧게 바꿨다.
+
+- 하루 단위: `보육일지_0825`
+- 요일별 칸이 있는 주간보육일지 서식이 활성일 때는 여전히 **기간이 드러나야
+  한다**(결정 6 — 「8월 24일 보육일지」인데 안이 한 주인 사고를 막는 장치라
+  같이 지운 게 아니다) — `주간보육일지_0824-0828`로 같은 표기 규칙만 맞췄다
+- `WEEK_LABEL` 대신 `WEEK_FROM`·`WEEK_TO`를 직접 써서 `MMDD`를 뽑는다
+- 목 모드로 실제 생성·다운로드까지 확인:
+  `주간보육일지_0824-0828.hwpx`로 정상 저장됨
+- `tsc` · `lint` · `build` 통과

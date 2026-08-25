@@ -21,12 +21,15 @@ import type {
   RecordSummary,
   TemplateCell,
   TemplateDocType,
+  TemplateStructure,
   UserAccount,
   UserAccountInput,
   UserAccountPatch,
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
 import { applyTemplate } from "@/lib/templates";
+import { analyzeHwpx, fillHwpx, type HwpxAnalysis } from "@/lib/hwpx";
+import { JOURNAL_SAMPLE_CELL_TEXT } from "@/mocks/journal-sample";
 
 /**
  * 상태형 인메모리 DB — MSW 핸들러의 유일한 데이터 소스.
@@ -34,7 +37,13 @@ import { applyTemplate } from "@/lib/templates";
  * 백엔드 연결 시 이 파일과 handlers.ts만 걷어내면 됩니다.
  */
 
-import { CLASS_NAME, TEACHER_NAME, TODAY } from "@/lib/constants";
+import {
+  CLASS_NAME,
+  TEACHER_NAME,
+  TODAY,
+  WEEK_FROM,
+  WEEK_TO,
+} from "@/lib/constants";
 
 export { CLASS_NAME, TEACHER_NAME, TODAY };
 
@@ -289,14 +298,42 @@ type DbState = {
    */
   formTemplates: FormTemplate[];
   templateSeq: number;
+  /**
+   * 서식 파일의 원본 바이트와 **채울 칸 목록**.
+   *
+   * 실서버로 치면 스토리지에 둔 `{id}_source.hwpx`와 `fillable_cells`다. 계약
+   * (EP-034)에 없는 값이라 화면으로 내보내지 않고 목 안에서만 쓴다 — 완성 문서를
+   * 만들 때 이 바이트에 칸 값을 채운다.
+   */
+  templateSource: Map<number, { bytes: ArrayBuffer; fillable: string[] }>;
+  /**
+   * 업로드된 서식의 **원본 바이트 그대로**(분석 성공 여부와 무관).
+   *
+   * `templateSource`는 hwpx 채움 로직 전용이라 .docx나 분석 실패 서식은 비어
+   * 있다. 이 맵은 "사람이 무엇을 올렸는지 열어 확인한다"는 별개 용도라 형식·
+   * 분석 성공 여부를 가리지 않고 채운다(SCR-015 후속, 원본 파일 내려받기).
+   */
+  templateRawFiles: Map<number, ArrayBuffer>;
 };
 
 function recordKey(childId: string, date: string) {
   return `${childId}:${date}`;
 }
 
-function docKey(type: DocType, childId: string | null) {
-  return `${type}:${childId ?? "class"}`;
+/**
+ * 문서 키.
+ *
+ * 보육일지만 **날짜까지** 키에 넣는다 — 화면에서 날짜를 고르는 유일한 문서라
+ * (SCR-006), 날짜가 다르면 다른 문서다. 날짜를 안 주면 오늘로 본다: 키가
+ * `journal:class`와 `journal:class:2026-08-24` 둘로 갈리면 같은 날 일지가
+ * 둘이 되어, 화면에서 고친 쪽과 체크리스트가 세는 쪽이 어긋난다.
+ *
+ * 다른 문서는 예전 그대로다 — 알림장도 오늘 하루치지만 날짜를 고르는 화면이
+ * 없으므로 키를 늘릴 이유가 없다.
+ */
+function docKey(type: DocType, childId: string | null, date?: string | null) {
+  const base = `${type}:${childId ?? "class"}`;
+  return type === "journal" ? `${base}:${date || TODAY}` : base;
 }
 
 // ---------- 초안 생성기 (실서비스의 LLM 호출 대체) ----------
@@ -360,8 +397,8 @@ function noticeContent(child: Child, rec: DailyRecord): string {
   return `오늘 ${first}${josa(first, "이는", "는")} ${acts} 활동을 하며 즐거운 하루를 보냈어요. ${lunchLine}, ${napLine}.${memoLine} 내일도 건강하게 만나요! 🌻`;
 }
 
-function journalContent(): string {
-  const recs = todaysRecords();
+function journalContent(date: string): string {
+  const recs = recordsOn(date);
   const attending = state.children.filter((c) => c.attending).length;
   const absent = state.children.length - attending;
   const acts = new Set<string>();
@@ -373,7 +410,7 @@ function journalContent(): string {
   if (tpl) {
     return applyTemplate(tpl, {
       반: CLASS_NAME,
-      날짜: TODAY,
+      날짜: date,
       선생님: TEACHER_NAME,
       등원: attending,
       결석: absent,
@@ -669,6 +706,8 @@ function createState(): DbState {
     templates: {},
     formTemplates: [],
     templateSeq: 500,
+    templateSource: new Map(),
+    templateRawFiles: new Map(),
     docIdByKey: new Map(),
     docSeq: 3000,
   };
@@ -682,10 +721,14 @@ export function reseed() {
   const templates = state.templates;
   const formTemplates = state.formTemplates;
   const templateSeq = state.templateSeq;
+  const templateSource = state.templateSource;
+  const templateRawFiles = state.templateRawFiles;
   state = createState();
   state.templates = templates;
   state.formTemplates = formTemplates;
   state.templateSeq = templateSeq;
+  state.templateSource = templateSource;
+  state.templateRawFiles = templateRawFiles;
   seedDocuments();
 }
 
@@ -806,11 +849,42 @@ export function judgeTemplateUpload(
   return null;
 }
 
-/** EP-032 — 업로드는 **항상 비활성 등록**이다. 활성화는 사람이 따로 누른다. */
+/** 실제로 읽은 hwpx 분석 결과를 계약(EP-034)의 칸 구조로 옮긴다. */
+function structureFromHwpx(analysis: HwpxAnalysis): TemplateStructure {
+  return {
+    sourceFormat: "hwpx",
+    tables: analysis.tables,
+    cells: analysis.cells.map((c) => ({
+      key: c.key,
+      table: c.table,
+      row: c.row,
+      col: c.col,
+      rowSpan: c.rowSpan,
+      colSpan: c.colSpan,
+      label: c.label,
+      empty: c.text === "",
+      existingText: c.text,
+      budgetChars: c.budgetChars,
+    })),
+  };
+}
+
+/**
+ * EP-032 — 업로드는 **항상 비활성 등록**이다. 활성화는 사람이 따로 누른다.
+ *
+ * `parsed`가 오면 그 서식을 브라우저에서 실제로 열어 읽은 결과다(.hwpx). 없으면
+ * 예전처럼 라벨 목록으로 흉내 낸다(.docx는 아직 목이 열지 못한다).
+ *
+ * `rawBytes`는 채움과 무관하게 **원본 그대로 보관**한다 — 분석에 실패했거나
+ * .docx라 칸을 못 읽어도, 사람이 "무엇을 올렸는지" 열어 확인할 수 있어야 한다.
+ * 넘기지 않으면 `parsed.bytes`를 그대로 쓴다.
+ */
 export function addFormTemplate(
   docType: TemplateDocType,
   fileName: string,
   analysisFailed: boolean,
+  parsed?: { analysis: HwpxAnalysis; bytes: ArrayBuffer } | null,
+  rawBytes?: ArrayBuffer | null,
 ): FormTemplate {
   const id = ++state.templateSeq;
   const ext = fileName.toLowerCase().endsWith(".hwpx") ? "hwpx" : "docx";
@@ -818,20 +892,23 @@ export function addFormTemplate(
     id,
     docType,
     fileKey: `center3/templates/${id}_source.${ext}`,
+    fileName,
     structure: analysisFailed
       ? null
-      : {
-          sourceFormat: ext,
-          tables: [
-            {
-              index: 1,
-              rows: TEMPLATE_CELL_LABELS[docType].length + 2,
-              cols: 7,
-              nested: false,
-            },
-          ],
-          cells: analyzeMockTemplate(docType, fileName),
-        },
+      : parsed
+        ? structureFromHwpx(parsed.analysis)
+        : {
+            sourceFormat: ext,
+            tables: [
+              {
+                index: 1,
+                rows: TEMPLATE_CELL_LABELS[docType].length + 2,
+                cols: 7,
+                nested: false,
+              },
+            ],
+            cells: analyzeMockTemplate(docType, fileName),
+          },
     analysisFailed,
     active: false,
     styleEnabled: false,
@@ -839,7 +916,65 @@ export function addFormTemplate(
     hasStructure: !analysisFailed,
   };
   state.formTemplates.unshift(template);
+  if (parsed)
+    state.templateSource.set(id, {
+      bytes: parsed.bytes,
+      fillable: parsed.analysis.cells
+        .filter((c) => c.fillable)
+        .map((c) => c.key),
+    });
+  const raw = rawBytes ?? parsed?.bytes ?? null;
+  if (raw) state.templateRawFiles.set(id, raw);
   return template;
+}
+
+/** 서식 원본 파일(채움용) — 완성 문서를 만들 때만 쓴다(화면으로 나가지 않는다). */
+export function getTemplateSource(id: number) {
+  return state.templateSource.get(id) ?? null;
+}
+
+/** 업로드된 서식의 원본 바이트 그대로 — 「원본 파일 열어보기」(SCR-015 후속)가 쓴다. */
+export function getTemplateRawFile(id: number): ArrayBuffer | null {
+  return state.templateRawFiles.get(id) ?? null;
+}
+
+/**
+ * 견본 서식 — `public/samples/journal-weekly-sample.hwpx`(달님반 8월 1주 주간보육일지).
+ *
+ * 아직 실서버에 붙지 않았으므로 화면이 열리자마자 서식이 하나 등록돼 있어야
+ * 「서식을 읽고 → 필요한 칸만 채우고 → 한글 파일로 돌려준다」가 끝까지 돌아간다.
+ * 교사가 자기 서식을 올리면 그것으로 바뀐다(타입당 활성 1개).
+ *
+ * 실패해도 조용히 넘어간다 — 견본이 없으면 서식 없는 기관과 같은 상태이고,
+ * 그 상태도 화면이 감당하도록 만들어져 있다.
+ */
+const SAMPLE_JOURNAL_TEMPLATE = {
+  url: "/samples/journal-weekly-sample.hwpx",
+  fileName: "주간보육일지_8월1주.hwpx",
+};
+
+let sampleTemplatePromise: Promise<void> | null = null;
+
+export function ensureSampleTemplates(): Promise<void> {
+  sampleTemplatePromise ??= (async () => {
+    if (state.formTemplates.some((t) => t.docType === "journal")) return;
+    try {
+      const res = await fetch(SAMPLE_JOURNAL_TEMPLATE.url);
+      if (!res.ok) return;
+      const bytes = await res.arrayBuffer();
+      const analysis = await analyzeHwpx(bytes);
+      const template = addFormTemplate(
+        "journal",
+        SAMPLE_JOURNAL_TEMPLATE.fileName,
+        false,
+        { analysis, bytes },
+      );
+      activateFormTemplate(template.id);
+    } catch (e) {
+      console.warn("[mock] 견본 서식을 등록하지 못했습니다", e);
+    }
+  })();
+  return sampleTemplatePromise;
 }
 
 export function listFormTemplates(
@@ -902,34 +1037,24 @@ export function buildDocumentCells(
 ): DocumentCell[] {
   const structure = template.structure;
   if (!structure) return [];
+  const source = getTemplateSource(template.id);
+  /*
+    채울 칸의 기준.
+
+    실제로 읽은 서식(.hwpx)은 분석기가 고른 `fillable`이 기준이다 — 등원·간식·
+    점심처럼 서식에 인쇄된 정형 문구는 글이 **있어도** 손대지 않고, 놀이·평가·
+    특이사항 칸만 채운다. 라벨로 흉내 낸 서식(.docx)은 예전 규칙(글이 없는 칸)을
+    그대로 쓴다.
+  */
+  const fillable = source ? new Set(source.fillable) : null;
   const sentences = content
     .split(/\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  // 서식 원형(existingText가 있는 칸)은 그대로 두고 빈 칸만 생성 대상으로 본다 —
-  // 실서버 `fillable_cells`도 라벨 단위로 채울 칸을 고른다.
   let cursor = 0;
+
   return structure.cells.map((cell, i) => {
-    if (cell.existingText) {
-      return {
-        key: cell.key,
-        table: cell.table,
-        row: cell.row,
-        col: cell.col,
-        rowSpan: cell.rowSpan,
-        colSpan: cell.colSpan,
-        label: cell.label,
-        text: cell.existingText,
-        source: "template" as const,
-        editable: false,
-      };
-    }
-    // 3번째 칸은 비워 둔다(모델 형식 이탈 재현). 화면이 견뎌야 하는 상태다.
-    const text =
-      i === 2
-        ? ""
-        : (sentences[cursor++ % Math.max(sentences.length, 1)] ?? "");
-    return {
+    const base = {
       key: cell.key,
       table: cell.table,
       row: cell.row,
@@ -937,7 +1062,40 @@ export function buildDocumentCells(
       rowSpan: cell.rowSpan,
       colSpan: cell.colSpan,
       label: cell.label,
-      text: text.slice(0, cell.budgetChars),
+    };
+    const isFillable = fillable
+      ? fillable.has(cell.key)
+      : cell.existingText === "";
+
+    if (!isFillable)
+      return {
+        ...base,
+        text: cell.existingText,
+        source: "template" as const,
+        editable: false,
+      };
+
+    /*
+      모델이 쓴 문안.
+
+      견본 서식(8월 1주 주간보육일지)은 **그 서식으로 실제 생성 파이프라인을 돌려
+      나온 출력**을 재생한다 — 브라우저에는 모델 키가 없으니 목이 문장을 지어내는
+      대신, 그때 나온 글을 칸 키로 맞춰 넣는다. 그 밖의 서식은 예전처럼 본문을
+      칸에 나눠 담고, 3번째 칸은 일부러 비운다(모델이 형식을 벗어나 한 칸을 비워
+      보내는 일이 실제로 있고, 그때도 화면이 견뎌야 한다).
+    */
+    const recorded =
+      source && template.docType === "journal"
+        ? JOURNAL_SAMPLE_CELL_TEXT[cell.key]
+        : undefined;
+    const generated =
+      i === 2
+        ? ""
+        : (sentences[cursor++ % Math.max(sentences.length, 1)] ?? "");
+
+    return {
+      ...base,
+      text: recorded ?? generated.slice(0, cell.budgetChars),
       source: "ai" as const,
       editable: true,
     };
@@ -955,8 +1113,12 @@ export function setTemplates(map: Partial<Record<DocType, string>>) {
 
 // ---------- 조회·연산 ----------
 
+function recordsOn(date: string): DailyRecord[] {
+  return Array.from(state.records.values()).filter((r) => r.date === date);
+}
+
 function todaysRecords(): DailyRecord[] {
-  return Array.from(state.records.values()).filter((r) => r.date === TODAY);
+  return recordsOn(TODAY);
 }
 
 export function getChildren(): Child[] {
@@ -1148,8 +1310,11 @@ export function getDraft(
   type: DocType,
   childId: string | null,
   regenerate = false,
+  /** 보육일지에서 교사가 고른 날. 다른 타입은 쓰지 않는다. */
+  date?: string | null,
 ): DocumentDraft | null {
-  const key = docKey(type, childId);
+  const day = date || TODAY;
+  const key = docKey(type, childId, day);
   const existing = state.documents.get(key);
   if (existing && !regenerate) return existing;
   if (existing && existing.status !== "draft") return existing; // 확정본은 재생성 불가
@@ -1164,8 +1329,22 @@ export function getDraft(
     content = noticeContent(child, rec);
     label = `${child.name} · ${TODAY} 알림장`;
   } else if (type === "journal") {
-    content = journalContent();
-    label = `${CLASS_NAME} · ${TODAY} 보육일지`;
+    content = journalContent(day);
+    /*
+      문서의 단위는 **서식이 정한다.**
+
+      기본 보육일지는 하루치지만, 원에서 쓰는 주간보육일지 서식은 칸이 요일별
+      (월~금)이라 문서 하나가 한 주다. 이름표가 어긋나면 내려받은 파일명이
+      「8월 24일 보육일지」인데 안에는 한 주가 들어 있는 일이 생긴다.
+    */
+    const weekly = activeTemplateFor("journal")?.structure?.cells.some((c) =>
+      /\(월\)|\(금\)|요일/.test(c.label),
+    );
+    // `YYYY-MM-DD` → `MMDD` — 파일명·화면 이름표에 짧게 쓴다.
+    const mmdd = (iso: string) => iso.slice(5).replace("-", "");
+    label = weekly
+      ? `주간보육일지_${mmdd(WEEK_FROM)}-${mmdd(WEEK_TO)}`
+      : `보육일지_${mmdd(day)}`;
   } else if (type === "plan") {
     content = planContent();
     label = `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`;
@@ -1203,6 +1382,18 @@ export function getDraft(
     if (template?.structure) {
       doc.templateId = template.id;
       doc.cells = buildDocumentCells(template, content);
+      /*
+        생성과 동시에 **초안 파일**을 만들어 둔다.
+
+        실서버가 그렇게 바뀌었다(`feat/template-driven-draft`). 교사가 올린 서식을
+        그대로 채우므로 한글에서 열어 봐야 칸이 넘치는지, 요일별로 제자리에
+        들어갔는지 검토된다 — 확정 전에 파일을 안 주면 그 검토가 막힌다.
+        확정본과 헷갈리지 않도록 키에 `_preview`를 박고, 화면과 파일명이 그
+        표식을 보고 「초안」이라고 밝힌다.
+      */
+      const ext = template.structure.sourceFormat === "hwpx" ? "hwpx" : "docx";
+      doc.fileKey = `center3/documents/${key}_preview.${ext}`;
+      doc.fileRenderStatus = "ok";
     }
   }
   state.documents.set(key, doc);
@@ -1218,10 +1409,11 @@ export function getDraft(
 export function renderDocumentFile(
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ):
   | { ok: true; fileKey: string; status: FileRenderStatus }
   | { ok: false; code: "NOT_CONFIRMED" | "NO_ACTIVE_TEMPLATE" } {
-  const doc = state.documents.get(docKey(type, childId));
+  const doc = state.documents.get(docKey(type, childId, date));
   if (!doc) return { ok: false, code: "NOT_CONFIRMED" };
   if (doc.status === "draft") return { ok: false, code: "NOT_CONFIRMED" };
   const template = type === "play_story" ? undefined : activeTemplateFor(type);
@@ -1231,9 +1423,37 @@ export function renderDocumentFile(
   }
   // 확장자는 원본 서식을 따른다 — 채우면 .hwpx, 폴백이면 .docx다.
   const ext = template.structure.sourceFormat === "hwpx" ? "hwpx" : "docx";
-  doc.fileKey = `center3/documents/${docKey(type, childId)}_final.${ext}`;
+  doc.fileKey = `center3/documents/${docKey(type, childId, date)}_final.${ext}`;
   doc.fileRenderStatus = "ok";
   return { ok: true, fileKey: doc.fileKey, status: "ok" };
+}
+
+/**
+ * EP-036이 내보낼 **파일 바이트** — 원본 서식에 지금 칸 값을 채운 .hwpx.
+ *
+ * 서식에 인쇄된 정형 문구 칸(`source: "template"`)은 값을 넘기지 않는다. 그래야
+ * 원본 글이 그대로 남는다 — 채우는 것은 모델이 쓴 칸과 교사가 고친 칸뿐이다.
+ * 서식을 열 수 없는 경우(.docx 등)는 `null`이고, 그때는 예전처럼 평문을 내려준다.
+ */
+export async function documentFileBytes(
+  type: DocType,
+  childId: string | null,
+  date?: string | null,
+): Promise<Uint8Array | null> {
+  const doc = state.documents.get(docKey(type, childId, date));
+  if (!doc?.templateId) return null;
+  const source = getTemplateSource(doc.templateId);
+  if (!source) return null;
+  const values: Record<string, string> = {};
+  doc.cells
+    .filter((c) => c.source !== "template")
+    .forEach((c) => (values[c.key] = c.text));
+  try {
+    return await fillHwpx(source.bytes, values);
+  } catch (e) {
+    console.warn("[mock] 서식을 채우지 못했습니다", e);
+    return null;
+  }
 }
 
 /** 칸 단위 저장(EP-013) — **바뀐 칸만** 병합한다. 서버와 같은 규약이다. */
@@ -1241,8 +1461,9 @@ export function mergeDocumentCells(
   type: DocType,
   childId: string | null,
   patch: Record<string, string>,
+  date?: string | null,
 ): DocumentDraft | null {
-  const doc = state.documents.get(docKey(type, childId));
+  const doc = state.documents.get(docKey(type, childId, date));
   if (!doc) return null;
   doc.cells = doc.cells.map((c) =>
     c.key in patch && c.editable
@@ -1309,8 +1530,9 @@ export function saveWorking(
   type: DocType,
   childId: string | null,
   working: string,
+  date?: string | null,
 ): boolean {
-  const doc = state.documents.get(docKey(type, childId));
+  const doc = state.documents.get(docKey(type, childId, date));
   if (!doc || doc.status !== "draft") return false;
   doc.working = working;
   return true;
@@ -1341,8 +1563,9 @@ export function confirmDoc(
   type: DocType,
   childId: string | null,
   content: string,
+  date?: string | null,
 ): DocumentDraft | null {
-  const doc = getDraft(type, childId);
+  const doc = getDraft(type, childId, false, date);
   if (!doc || doc.status !== "draft") return doc;
   doc.working = content;
   doc.editDistance = editRatio(doc.content, content);
@@ -1353,8 +1576,9 @@ export function confirmDoc(
 export function sendDoc(
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): DocStatus | null {
-  const doc = state.documents.get(docKey(type, childId));
+  const doc = state.documents.get(docKey(type, childId, date));
   if (!doc || doc.status === "draft") return null; // 불변식: 확정 전 발송 불가
   doc.status = "sent";
   return doc.status;
@@ -1682,8 +1906,12 @@ export function setReplayMode(on: boolean) {
 // ---------- 문서 id 브리지 (명세: document_id 정수) ----------
 
 /** (type,childId) 키에 안정적인 정수 document_id를 매긴다(없으면 발급). */
-export function assignDocId(type: DocType, childId: string | null): number {
-  const key = docKey(type, childId);
+export function assignDocId(
+  type: DocType,
+  childId: string | null,
+  date?: string | null,
+): number {
+  const key = docKey(type, childId, date);
   let id = state.docIdByKey.get(key);
   if (id == null) {
     id = state.docSeq += 1;
@@ -1692,28 +1920,30 @@ export function assignDocId(type: DocType, childId: string | null): number {
   return id;
 }
 
-/** document_id → (type,childId) 역해소. 없으면 null. */
+/** document_id → (type,childId,date) 역해소. 없으면 null. */
 export function resolveDocId(
   id: number,
-): { type: DocType; childId: string | null } | null {
+): { type: DocType; childId: string | null; date: string | null } | null {
   const found = Array.from(state.docIdByKey.entries()).find(
     ([, value]) => value === id,
   );
   if (!found) return null;
-  const key = found[0];
-  const idx = key.indexOf(":");
+  const [type, cid, date] = found[0].split(":");
   return {
-    type: key.slice(0, idx) as DocType,
-    childId: key.slice(idx + 1) === "class" ? null : key.slice(idx + 1),
+    type: type as DocType,
+    childId: cid === "class" ? null : cid,
+    // 보육일지만 3번째 조각(날짜)이 있다.
+    date: date ?? null,
   };
 }
 
-/** 특정 (type,childId) 문서를 조회(있으면). id 없이 키로 직접 접근. */
+/** 특정 (type,childId,date) 문서를 조회(있으면). id 없이 키로 직접 접근. */
 export function getDocByTarget(
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): DocumentDraft | null {
-  return state.documents.get(docKey(type, childId)) ?? null;
+  return state.documents.get(docKey(type, childId, date)) ?? null;
 }
 
 /** EP-012 목록: 조건에 맞는 (id, doc) 쌍을 반환. */
@@ -1721,16 +1951,20 @@ export function listDocuments(filter: {
   type?: DocType;
   childId?: string | null;
   status?: DocStatus;
+  /** EP-012 `date` — 날짜 단위 문서(보육일지)를 그 날짜의 것으로 좁힌다 */
+  date?: string;
 }): { id: number; doc: DocumentDraft }[] {
   const out: { id: number; doc: DocumentDraft }[] = [];
   Array.from(state.documents.entries()).forEach(([key, doc]) => {
-    const idx = key.indexOf(":");
-    const cid = key.slice(idx + 1);
+    const [, cid, date] = key.split(":");
     const childId = cid === "class" ? null : cid;
     if (filter.type && doc.type !== filter.type) return;
     if (filter.childId !== undefined && childId !== filter.childId) return;
     if (filter.status && doc.status !== filter.status) return;
-    out.push({ id: assignDocId(doc.type, childId), doc });
+    // 날짜를 키에 넣지 않는 문서(date === undefined)는 날짜 필터로 거르지
+    // 않는다 — 그 문서들에는 조를 날짜 자체가 없다.
+    if (filter.date && date && date !== filter.date) return;
+    out.push({ id: assignDocId(doc.type, childId, date), doc });
   });
   return out;
 }

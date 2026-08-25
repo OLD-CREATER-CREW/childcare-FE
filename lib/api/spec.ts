@@ -370,11 +370,24 @@ export type SpecTemplateCell = {
   budget_chars: number;
 };
 
-/** EP-032·034·052 응답 */
+/**
+ * EP-032·034·052 응답.
+ *
+ * `file_name`은 명세서(r6)에 아직 없는 필드다 — `file_key`는 서버가 매긴
+ * 저장 키(`center3/templates/501_source.docx`)일 뿐 사람이 올린 원본 파일명이
+ * 아니라서, 등록 이력에서 "무엇을 올렸는지" 구분할 방법이 없었다(SCR-015 후속).
+ * 백엔드에 필드 추가를 요청해야 한다 — 그 전까지 목은 이 값을 함께 내려준다.
+ *
+ * **`?`로 선언한다.** 실 배포본은 아직 이 필드를 보내지 않으므로(확인됨),
+ * `string`으로 단정하면 `mapTemplate`이 `undefined`를 그대로 실어 화면에
+ * "undefined"를 찍는 사고로 이어진다 — 타입이 실제로 올 수 있는 값을 정직하게
+ * 반영해야 그 사고를 컴파일 시점에 막는다.
+ */
 export type SpecTemplate = {
   template_id: number;
   doc_type: SpecTemplateDocType;
   file_key: string;
+  file_name?: string;
   structure_meta: SpecStructureMeta;
   active: boolean;
   style_enabled?: boolean;
@@ -386,6 +399,8 @@ export type SpecTemplateListItem = {
   template_id: number;
   doc_type: SpecTemplateDocType;
   active: boolean;
+  /** 위 `SpecTemplate.file_name`과 같은 이유로 `?` — 실 배포본엔 아직 없다 */
+  file_name?: string;
   style_enabled?: boolean;
   created_at: string;
 };

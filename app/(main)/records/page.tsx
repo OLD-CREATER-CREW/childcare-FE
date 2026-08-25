@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, ChevronRight, Mic, Paperclip } from "lucide-react";
 import { useApp } from "@/lib/store";
-import { ACTIVITY_PRESETS, TODAY } from "@/lib/constants";
+import { ACTIVITY_PRESETS, DATE_OPTIONS, TODAY } from "@/lib/constants";
 import {
   useChildren,
   useDailyRecord,
@@ -48,31 +48,6 @@ const NAP_TIME_OPTIONS: string[] = (() => {
     times.push(`${h}:${m}`);
   }
   return times;
-})();
-
-/**
- * 날짜 선택지 — 오늘부터 최근 2주.
- *
- * 예전에는 `2026-07-16`·`2026-07-15` 두 날짜가 박혀 있었다. 오늘이 그 날이
- * 아니면 드롭다운이 "선택"으로 비어 보이고, 고르는 순간 기록이 없는 날로
- * 넘어간다.
- */
-const DATE_OPTIONS: { value: string; label: string }[] = (() => {
-  const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
-  const out: { value: string; label: string }[] = [];
-  const cursor = new Date();
-  for (let i = 0; i < 14; i += 1) {
-    const y = cursor.getFullYear();
-    const m = `${cursor.getMonth() + 1}`.padStart(2, "0");
-    const d = `${cursor.getDate()}`.padStart(2, "0");
-    const value = `${y}-${m}-${d}`;
-    out.push({
-      value,
-      label: `${value} (${WEEKDAY[cursor.getDay()]})${i === 0 ? " · 오늘" : ""}`,
-    });
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  return out;
 })();
 
 const EMPTY_FORM = {

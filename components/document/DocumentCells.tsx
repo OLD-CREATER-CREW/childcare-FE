@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, Lock, PencilLine } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  PencilLine,
+} from "lucide-react";
 import { useSaveDocumentCells, useTemplate } from "@/lib/queries";
 import { Notice } from "@/components/ui";
 import type { DocType, DocumentCell } from "@/lib/types";
@@ -20,12 +26,15 @@ import type { DocType, DocumentCell } from "@/lib/types";
 export function DocumentCells({
   type,
   childId,
+  date = null,
   cells,
   templateId,
   editable,
 }: {
   type: DocType;
   childId: string | null;
+  /** 날짜 단위 문서(보육일지)에서 고른 날 — 저장이 그 날 문서로 가야 한다 */
+  date?: string | null;
   cells: DocumentCell[];
   templateId: number | null;
   /** 확정 후에는 읽기 전용이다 */
@@ -40,10 +49,10 @@ export function DocumentCells({
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // 아이·문서가 바뀌면 편집 중이던 값은 남아 있으면 안 된다.
+  // 아이·날짜·문서가 바뀌면 편집 중이던 값은 남아 있으면 안 된다.
   useEffect(() => {
     setDrafts({});
-  }, [type, childId]);
+  }, [type, childId, date]);
 
   useEffect(() => {
     const pending = timers.current;
@@ -59,7 +68,7 @@ export function DocumentCells({
     // 방금 서버가 준 값으로 되돌아가는 칸이 생긴다.
     timers.current[key] = setTimeout(() => {
       saveMutation.mutate(
-        { type, childId, cells: { [key]: next } },
+        { type, childId, cells: { [key]: next }, date },
         {
           onSuccess: () => {
             setSavedKey(key);
@@ -90,6 +99,20 @@ export function DocumentCells({
     (c) => c.source !== "template" || c.text.trim() !== "",
   );
   const hiddenCount = cells.length - visibleCells.length;
+  /*
+    서식 문구 칸은 **접어 둔다.**
+
+    실물 주간보육일지는 칸이 69개인데 그중 교사가 볼 것은 22개다. 나머지는 등원·
+    간식·점심처럼 해마다 그대로 나가는 인쇄 문구라, 문서 순서대로 늘어놓으면
+    검토할 칸이 40여 장의 카드 사이에 흩어진다. 검토 범위를 좁히려고 붙인 표식
+    (`source`)이 정작 화면에서는 아무것도 좁혀 주지 못했다.
+
+    지우지는 않는다 — 완성 문서에 그대로 실리는 글이라 무엇이 나갈지 볼 수 있어야
+    한다. 기본은 접힘, 펼치면 원래대로 보인다.
+  */
+  const editCells = visibleCells.filter((c) => c.source !== "template");
+  const printedCells = visibleCells.filter((c) => c.source === "template");
+  const [printedOpen, setPrintedOpen] = useState(false);
 
   return (
     <div className="stack">
@@ -125,47 +148,104 @@ export function DocumentCells({
         </Notice>
       )}
 
-      {visibleCells.map((c) => {
-        const value = valueOf(c);
-        const locked = !editable || !c.editable;
-        return (
-          <div key={c.key} className="card">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-[13px] font-semibold text-ink">
-                {c.label || "(라벨 없음)"}
-              </span>
-              <CellSourceTag source={c.source} />
-              <span className="font-mono text-[11px] text-muted">{c.key}</span>
-              {savedKey === c.key && (
-                <span className="ml-auto text-[11.5px] font-semibold text-confirm">
-                  저장됨 ✓
-                </span>
-              )}
-            </div>
+      {editCells.map((c) => (
+        <CellCard
+          key={c.key}
+          cell={c}
+          value={valueOf(c)}
+          locked={!editable || !c.editable}
+          saved={savedKey === c.key}
+          onEdit={onEdit}
+        />
+      ))}
 
-            {locked ? (
-              <div className="draftbox confirmed whitespace-pre-wrap text-[14px] leading-[1.85]">
-                {value || (
-                  <span className="text-[13px] text-muted">
-                    비어 있는 칸입니다 — 서식 원형을 그대로 둡니다.
-                  </span>
-                )}
-              </div>
+      {printedCells.length > 0 && (
+        <div className="card">
+          <button
+            className="flex w-full items-center gap-2 text-left text-[13px] font-semibold text-ink"
+            onClick={() => setPrintedOpen((v) => !v)}
+            aria-expanded={printedOpen}
+          >
+            {printedOpen ? (
+              <ChevronDown size={15} />
             ) : (
-              <div className="draftbox">
-                <textarea
-                  value={value}
-                  onChange={(e) => onEdit(c.key, e.target.value)}
-                  rows={Math.max(2, Math.ceil(value.length / 45))}
-                  placeholder="이 칸은 비어 있습니다 — 직접 채워 주세요"
-                  className="w-full resize-y border-0 bg-transparent text-[14px] leading-[1.85] [font-family:inherit] focus:outline-none"
-                  aria-label={`${c.label} 칸 편집`}
-                />
-              </div>
+              <ChevronRight size={15} />
             )}
-          </div>
-        );
-      })}
+            서식에 인쇄된 문구 {printedCells.length}개
+            <span className="hint ml-1">
+              고치지 않습니다 — 완성 문서에 그대로 나갑니다
+            </span>
+          </button>
+
+          {printedOpen && (
+            <div className="stack mt-3">
+              {printedCells.map((c) => (
+                <CellCard
+                  key={c.key}
+                  cell={c}
+                  value={valueOf(c)}
+                  locked
+                  saved={false}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 칸 하나 — 라벨·출처·편집창. 서식 문구 칸은 잠긴 채 같은 모양으로 보인다. */
+function CellCard({
+  cell,
+  value,
+  locked,
+  saved,
+  onEdit,
+}: {
+  cell: DocumentCell;
+  value: string;
+  locked: boolean;
+  saved: boolean;
+  onEdit: (key: string, next: string) => void;
+}) {
+  return (
+    <div className="card">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-[13px] font-semibold text-ink">
+          {cell.label || "(라벨 없음)"}
+        </span>
+        <CellSourceTag source={cell.source} />
+        <span className="font-mono text-[11px] text-muted">{cell.key}</span>
+        {saved && (
+          <span className="ml-auto text-[11.5px] font-semibold text-confirm">
+            저장됨 ✓
+          </span>
+        )}
+      </div>
+
+      {locked ? (
+        <div className="draftbox confirmed whitespace-pre-wrap text-[14px] leading-[1.85]">
+          {value || (
+            <span className="text-[13px] text-muted">
+              비어 있는 칸입니다 — 서식 원형을 그대로 둡니다.
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="draftbox">
+          <textarea
+            value={value}
+            onChange={(e) => onEdit(cell.key, e.target.value)}
+            rows={Math.max(2, Math.ceil(value.length / 45))}
+            placeholder="이 칸은 비어 있습니다 — 직접 채워 주세요"
+            className="w-full resize-y border-0 bg-transparent text-[14px] leading-[1.85] [font-family:inherit] focus:outline-none"
+            aria-label={`${cell.label} 칸 편집`}
+          />
+        </div>
+      )}
     </div>
   );
 }

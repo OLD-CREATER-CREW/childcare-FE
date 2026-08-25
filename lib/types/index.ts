@@ -218,6 +218,8 @@ export type FormTemplate = {
   id: number;
   docType: TemplateDocType;
   fileKey: string;
+  /** 사람이 올린 원본 파일명. 등록 이력에서 "무엇을 올렸는지" 보여 주는 값이다. */
+  fileName: string;
   /**
    * 분석된 칸 구조. `null`인 경우가 둘이다 —
    * 분석 실패(`analysisFailed`)이거나, 구 v1로 분석돼 칸 정보가 없는 템플릿이다.

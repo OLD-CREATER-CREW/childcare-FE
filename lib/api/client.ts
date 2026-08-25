@@ -280,6 +280,38 @@ export const api = {
         "document",
     };
   },
+  /**
+   * 만들면서 곧바로 파일을 받는 POST — 보육일지 생성(EP-010)이 쓴다.
+   *
+   * 그 문서는 화면 안의 검토 단계가 없어 응답이 JSON이 아니라 완성 한글 파일이다.
+   * 만들어진 문서의 `document_id`는 바디에 실을 수 없어 `X-Document-Id` 헤더로
+   * 온다(서버 CORS `expose_headers`에 등록돼 있어야 읽힌다).
+   *
+   * 오류는 여전히 JSON 봉투다 — `rawRequest`가 이미 `ApiError`로 바꿔 던지므로
+   * 여기서 성공 응답만 다루면 된다.
+   */
+  postFile: async (
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+  ): Promise<DownloadedFile & { documentId: number | null }> => {
+    const res = await rawRequest(
+      path,
+      {
+        method: "POST",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+      opts,
+    );
+    const id = Number(res.headers.get("X-Document-Id"));
+    return {
+      blob: await res.blob(),
+      filename:
+        filenameFromDisposition(res.headers.get("Content-Disposition")) ??
+        "document",
+      documentId: Number.isFinite(id) && id > 0 ? id : null,
+    };
+  },
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>(
       path,

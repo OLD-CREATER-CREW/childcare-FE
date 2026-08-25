@@ -21,7 +21,7 @@ import type { DocType, DocumentDraft } from "@/lib/types";
  * 확정 전에 이걸 밝혀 두면 "이 화면에서 한글 파일이 나오긴 하나" 하는 의문이
  * 남지 않는다.
  */
-function fileKindLabel(format: string | null | undefined): string {
+export function fileKindLabel(format: string | null | undefined): string {
   if (format === "hwpx") return "한글 파일(.hwpx)";
   if (format === "docx") return "워드 파일(.docx)";
   return "완성 문서 파일";
@@ -46,11 +46,17 @@ function fileKindLabel(format: string | null | undefined): string {
 export function DocumentFileBar({
   type,
   childId,
+  date = null,
   doc,
+  hideDraftCard = false,
 }: {
   type: DocType;
   childId: string | null;
+  /** 날짜 단위 문서(보육일지)에서 고른 날 — 파일도 그 날 문서의 것이어야 한다 */
+  date?: string | null;
   doc: DocumentDraft;
+  /** 확정 전 내려받기를 화면 위쪽에서 이미 내주고 있을 때 — 이 카드는 접는다 */
+  hideDraftCard?: boolean;
 }) {
   const { toast } = useApp();
   const renderMutation = useRenderDocumentFile();
@@ -82,7 +88,7 @@ export function DocumentFileBar({
   const make = () => {
     setError(null);
     renderMutation.mutate(
-      { type, childId },
+      { type, childId, date },
       {
         onSuccess: () =>
           toast("완성 문서를 만들었습니다 — 내려받을 수 있습니다"),
@@ -94,7 +100,7 @@ export function DocumentFileBar({
   const download = () => {
     setError(null);
     downloadMutation.mutate(
-      { type, childId },
+      { type, childId, date },
       {
         onSuccess: ({ blob, filename }) => {
           // 확장자·파일명은 서버가 정한다 — 서식을 채우면 .hwpx, 폴백이면 .docx다.
@@ -126,6 +132,7 @@ export function DocumentFileBar({
   if (doc.status === "draft") {
     // 서식도 파일도 없으면 약속할 것이 없다 — 빈 카드로 화면만 늘리지 않는다.
     if (!hasFile && !activeTemplate) return null;
+    if (hideDraftCard) return null;
     return (
       <div className="card">
         <h2>

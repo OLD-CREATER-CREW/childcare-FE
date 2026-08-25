@@ -4,16 +4,20 @@ import { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   Eye,
+  FileText,
   FileWarning,
   FolderOpen,
   Power,
   ShieldAlert,
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
+import { saveBlob } from "@/lib/download";
 import {
   useActivateTemplate,
   useDeactivateTemplate,
+  useDownloadTemplateFile,
   useSetTemplateStyle,
   useTemplate,
   useTemplates,
@@ -134,6 +138,8 @@ export default function TemplatesPage() {
     null,
   );
   const [styleTarget, setStyleTarget] = useState<FormTemplate | null>(null);
+  /** 지금 원본 파일을 내려받는 중인 템플릿 — 그 행의 버튼만 비활성화한다 */
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const listQuery = useTemplates(docType);
@@ -142,6 +148,7 @@ export default function TemplatesPage() {
   const activateMutation = useActivateTemplate();
   const deactivateMutation = useDeactivateTemplate();
   const styleMutation = useSetTemplateStyle();
+  const downloadMutation = useDownloadTemplateFile();
 
   const templates = useMemo(() => listQuery.data ?? [], [listQuery.data]);
   const active = templates.find((t) => t.active) ?? null;
@@ -175,6 +182,22 @@ export default function TemplatesPage() {
     );
     // 같은 파일을 다시 고를 수 있게 비운다(변환 후 재시도가 흔하다).
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  /** 원본 파일 그대로 내려받는다 — 채워진 결과가 아니라 사람이 올린 그 파일이다. */
+  const openFile = (id: number) => {
+    setDownloadingId(id);
+    downloadMutation.mutate(id, {
+      onSuccess: ({ blob, filename }) => {
+        saveBlob(blob, filename);
+        toast(`${filename} 을(를) 저장했습니다`);
+      },
+      onError: (e) =>
+        toast(
+          e instanceof ApiError ? e.message : "파일을 내려받지 못했습니다.",
+        ),
+      onSettled: () => setDownloadingId(null),
+    });
   };
 
   const activate = (id: number) =>
@@ -287,6 +310,8 @@ export default function TemplatesPage() {
               onDeactivate={() => setDeactivateTarget(active)}
               onToggleStyle={() => toggleStyle(active)}
               stylePending={styleMutation.isPending}
+              onOpenFile={() => openFile(active.id)}
+              opening={downloadingId === active.id}
             />
           ) : (
             /* 빈 상태에서 불안을 주지 않는다 — 폴백이 정상 동작임을 밝힌다 */
@@ -382,6 +407,26 @@ export default function TemplatesPage() {
               </span>
             </h2>
 
+            {/*
+              지금 무엇을 올렸었는지 파일명으로 보여 주고, 눌러서 원본을 그대로 연다.
+              `fileName`은 서버에 새로 요청한 필드라 옛 배포본에는 없을 수 있다 —
+              그 경우 `undefined`를 찍는 대신 버튼째 감춘다(백엔드 반영 전까지).
+            */}
+            {preview?.fileName && (
+              <div className="mb-3">
+                <button
+                  className="btn px-2.5 py-1 text-[12.5px]"
+                  onClick={() => openFile(preview.id)}
+                  disabled={downloadingId === preview.id}
+                >
+                  <Download size={13} />
+                  {downloadingId === preview.id
+                    ? "여는 중…"
+                    : `원본 파일 열기 — ${preview.fileName}`}
+                </button>
+              </div>
+            )}
+
             {previewQuery.isLoading ? (
               <div className="draftbox">
                 <Skeleton lines={6} />
@@ -455,6 +500,7 @@ export default function TemplatesPage() {
             <table className="tbl rowhover">
               <thead>
                 <tr>
+                  <th>파일명</th>
                   <th>등록일</th>
                   <th>상태</th>
                   <th>문체 예시</th>
@@ -464,6 +510,30 @@ export default function TemplatesPage() {
               <tbody>
                 {templates.map((t) => (
                   <tr key={t.id}>
+                    <td className="max-w-[220px] text-[12.5px]">
+                      {/*
+                        등록된 파일이 무엇인지 이름으로 확인하고, 눌러서 원본을 연다.
+                        `fileName`이 없는 옛 배포본 데이터는 누를 게 없으니 문구만 둔다.
+                      */}
+                      {t.fileName ? (
+                        <button
+                          className="inline-flex items-center gap-1 px-0 text-left text-ink hover:text-primary hover:underline"
+                          onClick={() => openFile(t.id)}
+                          disabled={downloadingId === t.id}
+                          title="원본 파일 내려받기"
+                        >
+                          <FileText
+                            size={12}
+                            className="flex-none text-muted"
+                          />
+                          <span className="truncate">
+                            {downloadingId === t.id ? "여는 중…" : t.fileName}
+                          </span>
+                        </button>
+                      ) : (
+                        <span className="text-muted">파일명 확인 불가</span>
+                      )}
+                    </td>
                     <td className="font-mono text-[12.5px]">
                       {fmtDate(t.createdAt)}
                     </td>
@@ -528,12 +598,16 @@ function ActiveTemplateRow({
   onDeactivate,
   onToggleStyle,
   stylePending,
+  onOpenFile,
+  opening,
 }: {
   template: FormTemplate;
   onPreview: () => void;
   onDeactivate: () => void;
   onToggleStyle: () => void;
   stylePending: boolean;
+  onOpenFile: () => void;
+  opening: boolean;
 }) {
   return (
     <>
@@ -543,7 +617,23 @@ function ActiveTemplateRow({
             <CheckCircle2 size={14} className="mr-1 inline text-confirm" />
             사용 중 · 등록일 {fmtDate(template.createdAt)}
           </div>
-          <div className="d">
+          {/*
+            지금 무엇을 올렸었는지 이름으로 바로 확인하고, 눌러서 원본을 연다.
+            `fileName`이 없는 옛 배포본 데이터는 버튼을 아예 그리지 않는다 —
+            `undefined`를 이름인 것처럼 보여 주는 것보다는 조용히 감추는 편이 낫다.
+          */}
+          {template.fileName && (
+            <button
+              className="mt-1 inline-flex items-center gap-1 px-0 text-[12.5px] text-muted hover:text-ink hover:underline"
+              onClick={onOpenFile}
+              disabled={opening}
+              title="원본 파일 내려받기"
+            >
+              <FileText size={12} className="flex-none" />
+              {opening ? "여는 중…" : template.fileName}
+            </button>
+          )}
+          <div className="d mt-1">
             이 문서 종류를 확정한 뒤 「문서 만들기」를 누르면 이 서식에 채워진
             파일을 받습니다.
           </div>

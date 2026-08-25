@@ -604,9 +604,13 @@ export const saveDailyRecord = async (
 async function resolveDocumentId(
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): Promise<number | null> {
   const params = new URLSearchParams({ type: docTypeToSpec(type) });
   if (childId) params.set("child_id", String(childIdToInt(childId)));
+  // 날짜 단위 문서(보육일지)는 **날짜까지 줘야 그 날의 문서**가 잡힌다(EP-012).
+  // 안 주면 목록의 첫 문서가 잡혀, 8월 20일을 골라 놓고 오늘 일지를 고치게 된다.
+  if (date) params.set("date", date);
   const list = await api.get<ListEnvelope<SpecDocumentListItem>>(
     `/documents?${params.toString()}`,
   );
@@ -624,8 +628,9 @@ async function resolveDocumentId(
 export const fetchDocumentDraft = async (
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): Promise<DocumentDraft | null> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null) return null;
   return mapDoc(await api.get<SpecDocument>(`/documents/${id}`));
 };
@@ -636,6 +641,8 @@ export const generateDocumentDraft = async (
   childId: string | null,
   topic?: string,
   className?: string | null,
+  /** 날짜 단위 문서(보육일지)에서 교사가 고른 날. 없으면 오늘. */
+  date?: string | null,
 ): Promise<DocumentDraft> => {
   const body: {
     type: SpecDocType;
@@ -647,7 +654,7 @@ export const generateDocumentDraft = async (
     topic?: string;
   } = { type: docTypeToSpec(type) };
   if (childId) body.child_id = childIdToInt(childId);
-  if (type === "notice" || type === "journal") body.date = TODAY;
+  if (type === "notice" || type === "journal") body.date = date || TODAY;
   if (type === "plan") {
     body.period_from = WEEK_FROM;
     body.period_to = WEEK_TO;
@@ -671,6 +678,25 @@ export const generateDocumentDraft = async (
   if (trimmed) body.topic = trimmed;
   return mapDoc(await api.post<SpecDocument>("/documents/generate", body));
 };
+
+/**
+ * 보육일지 만들기(EP-010) — 응답이 JSON이 아니라 **완성된 한글 파일**이다.
+ *
+ * 이 문서에는 화면 안의 검토·수정 단계가 없다. 산출물이 글이 아니라 원에 제출하는
+ * 한글 파일이고, 고칠 곳이 있으면 받은 hwpx를 한글에서 직접 고치는 편이 칸을
+ * 하나씩 눌러 고치는 것보다 빠르다. 그래서 예전의 다섯 단계(초안 → 칸 편집 →
+ * 확정 → 문서 만들기 → 내려받기)를 이 한 번의 호출로 접었다.
+ *
+ * 서식이 없으면 서버가 **모델을 부르기 전에** 409 `NO_ACTIVE_TEMPLATE`으로 막는다
+ * — 화면은 이 코드를 받으면 서식을 올리라고 안내한다(오류지만 비정상은 아니다).
+ */
+export const generateJournalFile = async (
+  date?: string | null,
+): Promise<DownloadedFile & { documentId: number | null }> =>
+  api.postFile("/documents/generate", {
+    type: "journal",
+    date: date || TODAY,
+  });
 
 /** EP-027 활동 추천. 서버가 실패해도 빈 목록으로 답한다. */
 export const fetchActivityRecommendations = async (
@@ -747,8 +773,9 @@ export const saveWorkingCopy = async (
   type: DocType,
   childId: string | null,
   content: string,
+  date?: string | null,
 ): Promise<{ ok: boolean }> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null) return { ok: false };
   await api.put(`/documents/${id}/draft`, { working: content });
   return { ok: true };
@@ -766,8 +793,9 @@ export const confirmDocument = async (
   type: DocType,
   childId: string | null,
   content: string | null,
+  date?: string | null,
 ): Promise<DocumentDraft> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null)
     throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
   return mapDoc(
@@ -781,8 +809,9 @@ export const confirmDocument = async (
 export const sendDocument = async (
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): Promise<{ ok: boolean }> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null) return { ok: false };
   await api.post(`/documents/${id}/send`);
   return { ok: true };
@@ -800,8 +829,9 @@ export const saveDocumentCells = async (
   type: DocType,
   childId: string | null,
   cells: Record<string, string>,
+  date?: string | null,
 ): Promise<{ ok: boolean }> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null) return { ok: false };
   if (Object.keys(cells).length === 0) return { ok: true };
   await api.put(`/documents/${id}/draft`, { cells });
@@ -823,8 +853,9 @@ export const saveDocumentCells = async (
 export const renderDocumentFile = async (
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): Promise<{ fileKey: string | null; status: FileRenderStatus }> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null)
     throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
   const res = await api.post<SpecRenderFile>(`/documents/${id}/file`);
@@ -841,8 +872,9 @@ export const renderDocumentFile = async (
 export const downloadDocumentFile = async (
   type: DocType,
   childId: string | null,
+  date?: string | null,
 ): Promise<DownloadedFile> => {
-  const id = await resolveDocumentId(type, childId);
+  const id = await resolveDocumentId(type, childId, date);
   if (id == null)
     throw new ApiError(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
   return api.getFile(`/documents/${id}/file`);
@@ -885,6 +917,10 @@ function mapTemplate(t: SpecTemplate): FormTemplate {
     id: t.template_id,
     docType: docTypeFromSpec(t.doc_type) as TemplateDocType,
     fileKey: t.file_key,
+    // 옛 배포본은 이 필드를 아직 보내지 않는다(백엔드 반영 전) — 빈 문자열로
+    // 두면 화면이 `undefined`를 이름인 것처럼 보여 주는 사고 없이 "없음"으로
+    // 처리할 수 있다.
+    fileName: t.file_name ?? "",
     structure,
     analysisFailed: t.structure_meta?.analysis_failed === true,
     active: t.active,
@@ -932,6 +968,10 @@ export const fetchTemplates = async (
     id: t.template_id,
     docType: docTypeFromSpec(t.doc_type) as TemplateDocType,
     fileKey: "",
+    // 옛 배포본은 이 필드를 아직 보내지 않는다(백엔드 반영 전) — 빈 문자열로
+    // 두면 화면이 `undefined`를 이름인 것처럼 보여 주는 사고 없이 "없음"으로
+    // 처리할 수 있다.
+    fileName: t.file_name ?? "",
     structure: null,
     analysisFailed: false,
     active: t.active,
@@ -981,6 +1021,19 @@ export const setTemplateStyleEnabled = async (
       style_enabled: enabled,
     }),
   );
+
+/**
+ * 서식 원본 파일 내려받기 — 명세에 아직 없는 엔드포인트다(SCR-015 후속).
+ *
+ * "지금 어떤 서식을 올렸었는지 확인할 수 없다"는 문제를 풀기 위해 추가했다.
+ * 완성 문서(EP-036)와 달리 **채워진 결과가 아니라 사람이 올린 원본**을 그대로
+ * 돌려준다 — 등록 이력에서 파일명만으로는 부족할 때 한글/워드로 직접 열어
+ * 확인할 수 있어야 한다. 실서버에도 `GET /api/templates/{id}/file`을 EP-036과
+ * 같은 바이너리 스트림 방식으로 추가해야 한다.
+ */
+export const downloadTemplateFile = async (
+  id: number,
+): Promise<DownloadedFile> => api.getFile(`/templates/${id}/file`);
 
 // ---------- 사진 (EP-016~019) ----------
 

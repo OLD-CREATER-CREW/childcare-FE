@@ -24,8 +24,15 @@ export const queryKeys = {
   dailyRecord: (childId: string, date: string) =>
     ["records", childId, date] as const,
   dayRecordedIds: (date: string) => ["records", "recorded", date] as const,
-  documentDraft: (type: DocType, childId: string | null) =>
-    ["documents", "draft", type, childId ?? "class"] as const,
+  /**
+   * 문서 초안. 날짜 단위 문서(보육일지)는 **날짜까지 키다** — 날짜를 바꾸면
+   * 다른 문서이므로 캐시가 섞이면 안 된다. 날짜를 쓰지 않는 문서는 `"any"`다.
+   */
+  documentDraft: (
+    type: DocType,
+    childId: string | null,
+    date: string | null = null,
+  ) => ["documents", "draft", type, childId ?? "class", date ?? "any"] as const,
   noticeQueue: ["documents", "notices", "queue"] as const,
   photos: ["photos"] as const,
   observations: (childId: string) => ["observations", childId] as const,
@@ -77,10 +84,14 @@ export const useDayRecordedIds = (date: string) =>
     staleTime: 0,
   });
 
-export const useDocumentDraft = (type: DocType, childId: string | null) =>
+export const useDocumentDraft = (
+  type: DocType,
+  childId: string | null,
+  date: string | null = null,
+) =>
   useQuery({
-    queryKey: queryKeys.documentDraft(type, childId),
-    queryFn: () => apiFn.fetchDocumentDraft(type, childId),
+    queryKey: queryKeys.documentDraft(type, childId, date),
+    queryFn: () => apiFn.fetchDocumentDraft(type, childId, date),
     retry: false,
   });
 
@@ -338,6 +349,7 @@ export const useRegenerateDraft = () => {
       childId,
       topic,
       className,
+      date,
     }: {
       type: DocType;
       childId: string | null;
@@ -345,9 +357,14 @@ export const useRegenerateDraft = () => {
       topic?: string;
       /** 놀이이야기의 대상 반. 반 단위 문서라 이 값이 범위를 정한다. */
       className?: string | null;
-    }) => apiFn.generateDocumentDraft(type, childId, topic, className),
-    onSuccess: (data, { type, childId }) => {
-      qc.setQueryData(queryKeys.documentDraft(type, childId), data);
+      /** 보육일지에서 교사가 고른 날. 다른 문서는 쓰지 않는다. */
+      date?: string | null;
+    }) => apiFn.generateDocumentDraft(type, childId, topic, className, date),
+    onSuccess: (data, { type, childId, date }) => {
+      qc.setQueryData(
+        queryKeys.documentDraft(type, childId, date ?? null),
+        data,
+      );
       // 알림장 대기열의 "생성 전/검토 대기" 표시는 초안 존재 여부에서 나온다.
       // 새로 만들었으면 그 목록도 다시 읽어야 칩이 바뀐다.
       if (type === "notice") {
@@ -363,11 +380,13 @@ export const useSaveWorkingCopy = () =>
       type,
       childId,
       content,
+      date,
     }: {
       type: DocType;
       childId: string | null;
       content: string;
-    }) => apiFn.saveWorkingCopy(type, childId, content),
+      date?: string | null;
+    }) => apiFn.saveWorkingCopy(type, childId, content, date),
   });
 
 export const useConfirmDocument = () => {
@@ -377,14 +396,19 @@ export const useConfirmDocument = () => {
       type,
       childId,
       content,
+      date,
     }: {
       type: DocType;
       childId: string | null;
       /** null이면 서버가 저장해 둔 작업본으로 확정한다(칸 단위 편집 문서) */
       content: string | null;
-    }) => apiFn.confirmDocument(type, childId, content),
-    onSuccess: (doc, { type, childId }) => {
-      qc.setQueryData(queryKeys.documentDraft(type, childId), doc);
+      date?: string | null;
+    }) => apiFn.confirmDocument(type, childId, content, date),
+    onSuccess: (doc, { type, childId, date }) => {
+      qc.setQueryData(
+        queryKeys.documentDraft(type, childId, date ?? null),
+        doc,
+      );
       qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
       qc.invalidateQueries({ queryKey: queryKeys.recordSummary });
       qc.invalidateQueries({ queryKey: queryKeys.checklist });
@@ -399,13 +423,15 @@ export const useSendDocument = () => {
     mutationFn: ({
       type,
       childId,
+      date,
     }: {
       type: DocType;
       childId: string | null;
-    }) => apiFn.sendDocument(type, childId),
-    onSuccess: (_data, { type, childId }) => {
+      date?: string | null;
+    }) => apiFn.sendDocument(type, childId, date),
+    onSuccess: (_data, { type, childId, date }) => {
       qc.invalidateQueries({
-        queryKey: queryKeys.documentDraft(type, childId),
+        queryKey: queryKeys.documentDraft(type, childId, date ?? null),
       });
       qc.invalidateQueries({ queryKey: queryKeys.noticeQueue });
       qc.invalidateQueries({ queryKey: queryKeys.checklist });
@@ -425,11 +451,13 @@ export const useSaveDocumentCells = () =>
       type,
       childId,
       cells,
+      date,
     }: {
       type: DocType;
       childId: string | null;
       cells: Record<string, string>;
-    }) => apiFn.saveDocumentCells(type, childId, cells),
+      date?: string | null;
+    }) => apiFn.saveDocumentCells(type, childId, cells, date),
   });
 
 // ---- 완성 문서 파일 (EP-036·038) ----
@@ -440,15 +468,17 @@ export const useRenderDocumentFile = () => {
     mutationFn: ({
       type,
       childId,
+      date,
     }: {
       type: DocType;
       childId: string | null;
-    }) => apiFn.renderDocumentFile(type, childId),
+      date?: string | null;
+    }) => apiFn.renderDocumentFile(type, childId, date),
     // `file_key`·`file_render_status`가 바뀌었으니 문서를 다시 읽어야
     // 「내려받기」 버튼이 나타난다.
-    onSuccess: (_res, { type, childId }) =>
+    onSuccess: (_res, { type, childId, date }) =>
       qc.invalidateQueries({
-        queryKey: queryKeys.documentDraft(type, childId),
+        queryKey: queryKeys.documentDraft(type, childId, date ?? null),
       }),
   });
 };
@@ -458,11 +488,35 @@ export const useDownloadDocumentFile = () =>
     mutationFn: ({
       type,
       childId,
+      date,
     }: {
       type: DocType;
       childId: string | null;
-    }) => apiFn.downloadDocumentFile(type, childId),
+      date?: string | null;
+    }) => apiFn.downloadDocumentFile(type, childId, date),
   });
+
+/**
+ * 보육일지 만들기 — 한 번의 호출로 완성 한글 파일까지 받는다(EP-010).
+ *
+ * 다른 문서의 「초안 만들기」(`useRegenerateDraft`)와 달리 캐시에 넣을 초안이
+ * 없다. 대신 문서가 하나 생겼으므로 목록·지표는 다시 읽는다 — 그래야 대시보드의
+ * 문서 수와 「이 날 일지 다시 받기」가 새 문서를 본다.
+ */
+export const useGenerateJournalFile = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ date }: { date?: string | null }) =>
+      apiFn.generateJournalFile(date),
+    onSuccess: (_res, { date }) => {
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentDraft("journal", null, date ?? null),
+      });
+      qc.invalidateQueries({ queryKey: queryKeys.metrics });
+      qc.invalidateQueries({ queryKey: queryKeys.checklist });
+    },
+  });
+};
 
 // ---- 양식 템플릿 (SCR-015) ----
 
@@ -555,6 +609,12 @@ export const useSetTemplateStyle = () => {
     },
   });
 };
+
+/** 서식 원본 파일 내려받기 — 등록 이력에서 파일명을 눌러 실제 파일을 연다. */
+export const useDownloadTemplateFile = () =>
+  useMutation({
+    mutationFn: (id: number) => apiFn.downloadTemplateFile(id),
+  });
 
 export const useUploadPhotos = () => {
   const qc = useQueryClient();

@@ -47,9 +47,11 @@ export function DocumentWorkbench({
   type,
   childId = null,
   className = null,
+  date = null,
   source,
   allowSend = false,
   sidePanel,
+  topSlot,
   emptyMessage,
   topic,
   generateLabel = "초안 만들기",
@@ -58,12 +60,24 @@ export function DocumentWorkbench({
 }: {
   type: DocType;
   childId?: string | null;
+  /**
+   * 날짜 단위 문서(보육일지)에서 교사가 고른 날. 문서를 가르는 값이라
+   * 조회·생성·저장·확정·파일이 **모두 같은 날짜를 들고 가야** 한다 —
+   * 한 곳만 빠지면 8월 20일 화면에서 오늘 일지를 고치게 된다.
+   */
+  date?: string | null;
   /** 놀이이야기의 대상 반. 반 단위 문서라 이 값이 근거 기록의 범위를 정한다
    *  — 아이 단위 문서의 `childId`와 같은 자리다. */
   className?: string | null;
   source: React.ReactNode;
   allowSend?: boolean;
   sidePanel?: React.ReactNode;
+  /**
+   * 문서 위에 먼저 놓을 줄 — 보육일지의 서식 업로드·한글 파일 내려받기가 여기 온다.
+   * 이 자리가 채워지면 아래 「서식 파일로 검토」 카드는 확정 전 갈래를 접는다
+   * (같은 내려받기 버튼이 화면에 둘 있으면 어느 쪽이 최신인지 알 수 없다).
+   */
+  topSlot?: React.ReactNode;
   /** 초안 생성 불가(404) 시 안내 문구 — 알림장의 "하루 기록 없음" 등 */
   emptyMessage?: React.ReactNode;
   /** 계획안·놀이이야기에서 교사가 정한 놀이 주제. 생성 요청에 실려 간다. */
@@ -76,7 +90,7 @@ export function DocumentWorkbench({
   canGenerate?: boolean;
 }) {
   const { toast } = useApp();
-  const draftQuery = useDocumentDraft(type, childId);
+  const draftQuery = useDocumentDraft(type, childId, date);
   const saveMutation = useSaveWorkingCopy();
   const confirmMutation = useConfirmDocument();
   const sendMutation = useSendDocument();
@@ -148,7 +162,7 @@ export function DocumentWorkbench({
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       saveMutation.mutate(
-        { type, childId, content: working },
+        { type, childId, content: working, date },
         {
           onSuccess: () => {
             setSavedTick(true);
@@ -165,7 +179,7 @@ export function DocumentWorkbench({
     confirmMutation.mutate(
       // 칸 단위 문서는 평문을 같이 보내지 않는다 — 칸 저장은 서버 쪽 working만
       // 갱신하므로, 화면이 들고 있던 옛 평문을 보내면 그게 확정본이 된다.
-      { type, childId, content: hasCells ? null : working },
+      { type, childId, content: hasCells ? null : working, date },
       {
         onSuccess: () => {
           setConfirmOpen(false);
@@ -180,7 +194,7 @@ export function DocumentWorkbench({
 
   const send = () =>
     sendMutation.mutate(
-      { type, childId },
+      { type, childId, date },
       {
         onSuccess: () =>
           toast("발송했습니다 — 학부모 화면 시뮬레이션에 노출됩니다"),
@@ -189,7 +203,7 @@ export function DocumentWorkbench({
 
   const regen = () =>
     regenMutation.mutate(
-      { type, childId, topic, className },
+      { type, childId, topic, className, date },
       { onSuccess: () => toast("초안을 새로 만들었습니다") },
     );
 
@@ -208,6 +222,8 @@ export function DocumentWorkbench({
 
   return (
     <>
+      {topSlot}
+
       <div className="flowrail">
         {/* 초안이 없으면 첫 단계가 아직 안 끝난 것이다 — 예전에는 늘 done이라
             버튼을 누르기도 전에 "생성 완료"로 보였다. */}
@@ -416,6 +432,7 @@ export function DocumentWorkbench({
             <DocumentCells
               type={type}
               childId={childId}
+              date={date}
               cells={doc.cells}
               templateId={doc.templateId}
               editable={status === "draft"}
@@ -509,7 +526,13 @@ export function DocumentWorkbench({
 
       {/* 완성 문서 파일 — 확정 뒤에만 나타난다(FN-020). 확정 전에는 스스로 감춘다. */}
       {doc && !notFound && (
-        <DocumentFileBar type={type} childId={childId} doc={doc} />
+        <DocumentFileBar
+          type={type}
+          childId={childId}
+          date={date}
+          doc={doc}
+          hideDraftCard={topSlot != null}
+        />
       )}
 
       {sidePanel}
