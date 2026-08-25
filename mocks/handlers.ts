@@ -1,39 +1,40 @@
 import { http, HttpResponse, delay } from "msw";
+import { analyzeHwpx, type HwpxAnalysis } from "@/lib/hwpx";
 import * as db from "@/mocks/db";
 import {
   childIdToInt,
-  consultIdToInt,
   decodeSpecRecord,
   docTypeFromSpec,
   domainFromSpec,
   domainToSpec,
   intToChildId,
-  intToConsultId,
   intToRecordId,
   intToUserId,
   recordIdToInt,
   userIdToInt,
-  summaryFromSpec,
-  summaryToSpec,
 } from "@/lib/api/spec";
 import type {
   SpecChild,
   SpecChildDetail,
-  SpecConsult,
   SpecDocType,
   SpecDocument,
+  SpecDocumentCell,
   SpecDomain,
   SpecPhoto,
+  SpecTemplate,
+  SpecTemplateDocType,
   SpecUserAccount,
 } from "@/lib/api/spec";
 import type {
   Child,
   ChildProfile,
-  ConsultSession,
   DailyRecord,
   DocType,
+  DocumentCell,
   DocumentDraft,
+  FormTemplate,
   Photo,
+  TemplateDocType,
   UserAccount,
   UserRole,
 } from "@/lib/types";
@@ -123,10 +124,69 @@ function specDocument(id: number, doc: DocumentDraft): SpecDocument {
     // 실제 서버도 교사가 사진을 일지에 붙이지 않았으면 빈 배열을 주므로,
     // 화면이 그 상태를 먼저 견디는지 확인되어야 한다.
     photo_suggestions: doc.type === "play_story" ? db.playStoryPhotos() : [],
+    template_id: doc.templateId,
+    cells: doc.cells.map(specDocumentCell),
+    file_key: doc.fileKey,
+    file_render_status: doc.fileRenderStatus,
     created_at: doc.generatedAt,
     confirmed_at: confirmed ? doc.generatedAt : null,
     sent_at: doc.status === "sent" ? doc.generatedAt : null,
     label: doc.label,
+  };
+}
+
+function specDocumentCell(c: DocumentCell): SpecDocumentCell {
+  return {
+    key: c.key,
+    table: c.table,
+    row: c.row,
+    col: c.col,
+    row_span: c.rowSpan,
+    col_span: c.colSpan,
+    label: c.label,
+    text: c.text,
+    source: c.source,
+    editable: c.editable,
+  };
+}
+
+const TEMPLATE_DOC_TO_SPEC: Record<TemplateDocType, SpecTemplateDocType> = {
+  notice: "notice",
+  journal: "journal",
+  plan: "weekly_plan",
+  plan_monthly: "monthly_plan",
+  evaluation: "dev_eval",
+};
+
+/** EP-032·034·052 응답. 분석 실패 템플릿은 `{analysis_failed:true}`만 담는다. */
+function specTemplate(t: FormTemplate): SpecTemplate {
+  return {
+    template_id: t.id,
+    doc_type: TEMPLATE_DOC_TO_SPEC[t.docType],
+    file_key: t.fileKey,
+    file_name: t.fileName,
+    structure_meta: t.analysisFailed
+      ? { analysis_failed: true }
+      : {
+          version: 2,
+          source_format: t.structure?.sourceFormat ?? "docx",
+          tables: t.structure?.tables ?? [],
+          cells: (t.structure?.cells ?? []).map((c) => ({
+            key: c.key,
+            table: c.table,
+            row: c.row,
+            col: c.col,
+            row_span: c.rowSpan,
+            col_span: c.colSpan,
+            label: c.label,
+            empty: c.empty,
+            existing_text: c.existingText,
+            budget_chars: c.budgetChars,
+          })),
+        },
+    active: t.active,
+    style_enabled: t.styleEnabled,
+    created_at: t.createdAt,
   };
 }
 
@@ -150,19 +210,6 @@ function specPhoto(p: Photo): SpecPhoto {
     sent_at: p.sent ? `${db.TODAY}T17:10:00+09:00` : null,
     icon: p.icon,
     taken_at: p.takenAt,
-  };
-}
-
-function specConsult(s: ConsultSession): SpecConsult {
-  return {
-    consult_id: consultIdToInt(s.id),
-    child_id: childIdToInt(s.childId),
-    created_at: `${s.date}T15:00:00+09:00`,
-    status: s.status === "confirmed" ? "confirmed" : "draft",
-    summary_draft: s.summaryDraft || null,
-    summary_final: s.summaryFinal ? summaryToSpec(s.summaryFinal) : null,
-    topic: s.topic,
-    transcript: s.transcript,
   };
 }
 
@@ -610,33 +657,6 @@ export const handlers = [
     },
   ),
 
-  // ===== 상담 (EP-006 조회 / EP-025 확정) =====
-  http.get("/api/children/:childId/consults", async ({ params }) => {
-    await delay(300);
-    const childId = intToChildId(Number(params.childId));
-    if (!db.getChild(childId))
-      return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    const { history } = db.getConsults(childId);
-    const items = history.map(specConsult);
-    return HttpResponse.json({
-      child_id: Number(params.childId),
-      items,
-      total: items.length,
-    });
-  }),
-
-  http.post("/api/consults/:consultId/confirm", async ({ params, request }) => {
-    await delay(420);
-    const uiId = intToConsultId(Number(params.consultId));
-    const body = (await request.json()) as {
-      summary_final: { core: string; requests: string; follow_up: string };
-    };
-    const ok = db.confirmConsult(uiId, summaryFromSpec(body.summary_final));
-    if (!ok) return err(409, "NO_SUMMARY", "먼저 요약 초안을 만들어 주세요.");
-    const session = db.state.consults.find((c) => c.id === uiId)!;
-    return HttpResponse.json(specConsult(session));
-  }),
-
   // ===== 하루 기록 (EP-007 저장 / EP-008 조회 / EP-009 태그) =====
   http.get("/api/records", async ({ request }) => {
     await delay(200);
@@ -697,6 +717,8 @@ export const handlers = [
 
   // ===== 문서 (EP-010~015) =====
   http.post("/api/documents/generate", async ({ request }) => {
+    // 서식이 등록돼 있어야 칸 단위 생성이 된다 — 견본은 한 번만 붙는다.
+    await db.ensureSampleTemplates();
     await delay(600);
     const body = (await request.json()) as {
       type: SpecDocType;
@@ -735,12 +757,58 @@ export const handlers = [
       return HttpResponse.json({ generated, failed }, { status: 201 });
     }
 
-    // 단일 생성
+    // 단일 생성 — 보육일지는 `date`가 문서를 가른다(EP-010).
     const childId = body.child_id ? intToChildId(body.child_id) : null;
-    const draft = db.getDraft(uiType, childId, true);
+
+    /*
+      보육일지만 응답이 JSON이 아니라 **완성 한글 파일**이다. 이 문서에는 화면
+      안의 검토 단계가 없어 생성·확정·렌더링·내려받기가 한 번에 끝난다.
+      `document_id`는 바디에 실을 수 없어 `X-Document-Id` 헤더로 내려 준다.
+
+      서식이 없으면 **초안을 만들기 전에** 막는다 — 실서버도 그렇게 한다(어차피
+      내줄 파일이 없는 요청에 모델을 부르지 않는다).
+    */
+    if (uiType === "journal") {
+      if (!db.activeTemplateFor("journal")?.structure)
+        return err(
+          409,
+          "NO_ACTIVE_TEMPLATE",
+          "이 문서 종류에 등록된 양식이 없습니다. 양식을 올리고 활성화한 뒤 다시 시도해 주세요.",
+        );
+
+      const journal = db.getDraft("journal", null, true, body.date);
+      if (!journal)
+        return err(404, "RECORD_NOT_FOUND", "먼저 하루 기록을 남겨 주세요.");
+
+      const journalId = db.assignDocId("journal", null, body.date);
+      // 검토 단계가 없으므로 만들어지는 순간 확정본이다 — 그래야 파일명에
+      // `초안` 표시가 붙지 않고, 렌더링(확정 후에만 된다)도 통과한다.
+      db.confirmDoc("journal", null, journal.working, body.date);
+      const rendered = db.renderDocumentFile("journal", null, body.date);
+      if (!rendered.ok)
+        return err(
+          422,
+          "RENDER_FAILED",
+          "완성 문서를 만들지 못했습니다. 양식의 표 구조를 확인해 주세요.",
+        );
+
+      const bytes = await db.documentFileBytes("journal", null, body.date);
+      const ext = rendered.fileKey.endsWith(".hwpx") ? "hwpx" : "docx";
+      const filename = `journal_${body.date ?? db.TODAY}.${ext}`;
+      return new HttpResponse(bytes ?? journal.working, {
+        status: 201,
+        headers: {
+          "Content-Type": MEDIA_TYPE[ext],
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+          "X-Document-Id": String(journalId),
+        },
+      });
+    }
+
+    const draft = db.getDraft(uiType, childId, true, body.date);
     if (!draft)
       return err(404, "RECORD_NOT_FOUND", "먼저 하루 기록을 남겨 주세요.");
-    const id = db.assignDocId(uiType, draft.childId);
+    const id = db.assignDocId(uiType, draft.childId, body.date);
     return HttpResponse.json(specDocument(id, draft), { status: 201 });
   }),
 
@@ -750,10 +818,12 @@ export const handlers = [
     const typeParam = url.searchParams.get("type");
     const statusParam = url.searchParams.get("status");
     const childParam = url.searchParams.get("child_id");
+    const dateParam = url.searchParams.get("date");
     const list = db.listDocuments({
       type: typeParam ? docTypeFromSpec(typeParam as SpecDocType) : undefined,
       childId: childParam ? intToChildId(Number(childParam)) : undefined,
       status: (statusParam as DocumentDraft["status"]) || undefined,
+      date: dateParam || undefined,
     });
     const items = list.map(({ id, doc }) => ({
       document_id: id,
@@ -771,7 +841,7 @@ export const handlers = [
     const target = db.resolveDocId(id);
     if (!target)
       return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    const doc = db.getDocByTarget(target.type, target.childId);
+    const doc = db.getDocByTarget(target.type, target.childId, target.date);
     if (!doc) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
     return HttpResponse.json(specDocument(id, doc));
   }),
@@ -780,16 +850,46 @@ export const handlers = [
     await delay(150);
     const id = Number(params.documentId);
     const target = db.resolveDocId(id);
-    const body = (await request.json()) as { working: string };
+    // 칸 단위 편집(`cells`)과 평문 통편집(`working`)을 둘 다 받는다 —
+    // 활성 템플릿이 없는 문서는 예전처럼 한 덩어리다(실서버 DraftUpdateIn과 동일).
+    const body = (await request.json()) as {
+      working?: string;
+      cells?: Record<string, string>;
+    };
     if (!target)
       return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    const ok = db.saveWorking(target.type, target.childId, body.working);
+
+    if (body.cells) {
+      const doc = db.mergeDocumentCells(
+        target.type,
+        target.childId,
+        body.cells,
+        target.date,
+      );
+      if (!doc) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+      if (doc.status !== "draft")
+        return err(409, "NOT_EDITABLE", "확정한 문서는 수정할 수 없습니다.");
+      return HttpResponse.json({
+        document_id: id,
+        status: doc.status,
+        working: doc.working,
+        cells: doc.cells.map(specDocumentCell),
+      });
+    }
+
+    const ok = db.saveWorking(
+      target.type,
+      target.childId,
+      body.working ?? "",
+      target.date,
+    );
     if (!ok)
       return err(409, "NOT_EDITABLE", "확정한 문서는 수정할 수 없습니다.");
     return HttpResponse.json({
       document_id: id,
       status: "draft",
-      working: body.working,
+      working: body.working ?? "",
+      cells: [],
     });
   }),
 
@@ -804,9 +904,18 @@ export const handlers = [
       const body = (await request.json().catch(() => ({}))) as {
         final?: string;
       };
-      const current = db.getDocByTarget(target.type, target.childId);
+      const current = db.getDocByTarget(
+        target.type,
+        target.childId,
+        target.date,
+      );
       const content = body.final ?? current?.working ?? current?.content ?? "";
-      const doc = db.confirmDoc(target.type, target.childId, content);
+      const doc = db.confirmDoc(
+        target.type,
+        target.childId,
+        content,
+        target.date,
+      );
       if (!doc) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
       return HttpResponse.json(specDocument(id, doc));
     },
@@ -818,7 +927,7 @@ export const handlers = [
     const target = db.resolveDocId(id);
     if (!target)
       return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
-    const status = db.sendDoc(target.type, target.childId);
+    const status = db.sendDoc(target.type, target.childId, target.date);
     if (!status) return err(409, "NOT_CONFIRMED", "먼저 검토·확정하세요.");
     return HttpResponse.json({
       document_id: id,
@@ -949,16 +1058,276 @@ export const handlers = [
     });
   }),
 
-  // 로컬 양식 동기화 — 공식 EP 목록 밖의 데스크톱 전용 확장(파일 시스템 서식 반영)
+  // ===== 양식 템플릿 (EP-032~035·037·052) — SCR-015 =====
+
+  /**
+   * EP-032 업로드·구조 분석. `multipart/form-data`(doc_type, file).
+   *
+   * 예전에는 이 경로가 로컬 양식 텍스트 JSON을 받는 데스크톱 전용 확장이었다.
+   * r6에서 계약이 파일 업로드로 바뀌었으므로 목도 같이 옮긴다 — 목만 옛 계약을
+   * 받아 주면 목에서만 통과하는 화면이 만들어진다(사진 업로드에서 겪은 일이다).
+   */
   http.post("/api/templates", async ({ request }) => {
-    await delay(150);
-    const { templates } = (await request.json()) as {
-      templates: Partial<Record<DocType, string>>;
-    };
-    db.setTemplates(templates ?? {});
+    await delay(900);
+    const form = await request.formData().catch(() => null);
+    if (!form)
+      return err(400, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다.");
+
+    const specType = String(form.get("doc_type") ?? "");
+    const file = form.get("file");
+    if (!(file instanceof File))
+      return err(400, "VALIDATION_ERROR", "서식 파일을 선택해 주세요.");
+    if (!SPEC_TO_TEMPLATE_DOC[specType as SpecTemplateDocType])
+      return err(400, "VALIDATION_ERROR", "지원하지 않는 문서 타입입니다.");
+    const docType = SPEC_TO_TEMPLATE_DOC[specType as SpecTemplateDocType];
+
+    switch (db.judgeTemplateUpload(file.name)) {
+      case "UNSUPPORTED_TEMPLATE_FILE":
+        return err(
+          415,
+          "UNSUPPORTED_TEMPLATE_FILE",
+          "지원 형식은 .docx 또는 .hwpx입니다.",
+        );
+      case "HWP_NEEDS_CONVERSION":
+        // 화면이 **변환 방법**을 안내해야 하는 자리다. 서버 message에 그 안내가
+        // 그대로 담겨 오므로 화면은 이 문장을 고쳐 쓰지 않는다.
+        return err(
+          415,
+          "HWP_NEEDS_CONVERSION",
+          "구 한글 파일(.hwp)은 서식을 채울 수 없습니다. 한글에서 열어 " +
+            "[파일 → 다른 이름으로 저장]에서 파일 형식을 'HWPX 문서'로 골라 저장한 뒤 다시 올려 주세요.",
+        );
+      case "TEMPLATE_ANALYSIS_FAILED": {
+        // 분석 실패도 행은 남는다(실서버와 동일) — 기존 활성 템플릿은 그대로다.
+        // 원본 바이트는 남겨 둔다 — 실패해도 무엇을 올렸는지는 열어 볼 수 있어야 한다.
+        const bytes = await file.arrayBuffer();
+        db.addFormTemplate(docType, file.name, true, null, bytes);
+        return err(
+          422,
+          "TEMPLATE_ANALYSIS_FAILED",
+          "이 서식은 자동 채움을 지원하지 못합니다.",
+        );
+      }
+    }
+
+    /*
+      .hwpx는 **실제로 열어 읽는다.** 표·병합·라벨을 그대로 뽑아야 완성 문서를
+      원본 서식에 채울 수 있다(`lib/hwpx`). 열지 못하면 실서버와 같은 갈래로
+      422를 돌려준다 — 행은 남고 기존 활성 서식은 그대로다.
+
+      .docx는 아직 목이 열지 못하므로 예전처럼 라벨 목록으로 흉내 낸다.
+    */
+    const bytes = await file.arrayBuffer();
+    let parsed: { analysis: HwpxAnalysis; bytes: ArrayBuffer } | null = null;
+    if (file.name.toLowerCase().endsWith(".hwpx")) {
+      try {
+        const analysis = await analyzeHwpx(bytes);
+        if (!analysis.cells.length) throw new Error("표가 없습니다");
+        parsed = { analysis, bytes };
+      } catch {
+        db.addFormTemplate(docType, file.name, true, null, bytes);
+        return err(
+          422,
+          "TEMPLATE_ANALYSIS_FAILED",
+          "이 서식은 자동 채움을 지원하지 못합니다.",
+        );
+      }
+    }
+
+    const template = db.addFormTemplate(
+      docType,
+      file.name,
+      false,
+      parsed,
+      bytes,
+    );
+    return HttpResponse.json(specTemplate(template), { status: 201 });
+  }),
+
+  http.get("/api/templates", async ({ request }) => {
+    await db.ensureSampleTemplates();
+    await delay(180);
+    const url = new URL(request.url);
+    const typeParam = url.searchParams.get("type");
+    const activeOnly = url.searchParams.get("active_only") === "true";
+    const docType = typeParam
+      ? SPEC_TO_TEMPLATE_DOC[typeParam as SpecTemplateDocType]
+      : undefined;
+    const items = db.listFormTemplates(docType, activeOnly).map((t) => ({
+      template_id: t.id,
+      doc_type: TEMPLATE_DOC_TO_SPEC[t.docType],
+      active: t.active,
+      file_name: t.fileName,
+      style_enabled: t.styleEnabled,
+      created_at: t.createdAt,
+    }));
+    return HttpResponse.json({ items, total: items.length });
+  }),
+
+  http.get("/api/templates/:templateId", async ({ params }) => {
+    await db.ensureSampleTemplates();
+    await delay(180);
+    const t = db.getFormTemplate(Number(params.templateId));
+    if (!t) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    return HttpResponse.json(specTemplate(t));
+  }),
+
+  http.post("/api/templates/:templateId/activate", async ({ params }) => {
+    await delay(260);
+    const id = Number(params.templateId);
+    const existing = db.getFormTemplate(id);
+    if (!existing)
+      return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    const t = db.activateFormTemplate(id);
+    if (!t)
+      return err(
+        409,
+        "TEMPLATE_NOT_ANALYZABLE",
+        "구조 분석에 실패한 서식은 활성화할 수 없습니다.",
+      );
     return HttpResponse.json({
-      ok: true,
-      applied: Object.keys(templates ?? {}),
+      template_id: t.id,
+      doc_type: TEMPLATE_DOC_TO_SPEC[t.docType],
+      active: t.active,
+    });
+  }),
+
+  http.delete("/api/templates/:templateId", async ({ params }) => {
+    await delay(220);
+    const t = db.deactivateFormTemplate(Number(params.templateId));
+    if (!t) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    return HttpResponse.json({ template_id: t.id, active: t.active });
+  }),
+
+  http.patch(
+    "/api/templates/:templateId/style",
+    async ({ params, request }) => {
+      await delay(200);
+      const id = Number(params.templateId);
+      const existing = db.getFormTemplate(id);
+      if (!existing)
+        return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+      const body = (await request.json()) as { style_enabled?: boolean };
+      if (typeof body.style_enabled !== "boolean")
+        return err(400, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다.");
+      const t = db.setFormTemplateStyle(id, body.style_enabled);
+      if (!t)
+        return err(
+          409,
+          "TEMPLATE_NOT_ANALYZABLE",
+          "구조 분석에 실패한 서식은 설정할 수 없습니다.",
+        );
+      return HttpResponse.json(specTemplate(t));
+    },
+  ),
+
+  /**
+   * 서식 원본 파일 내려받기 — 명세에 아직 없는 확장(SCR-015 후속, `lib/api/index.ts`
+   * 주석 참고). 완성 문서(EP-036)와 달리 **채워진 결과가 아니라 사람이 올린
+   * 원본**을 그대로 돌려준다 — 등록 이력에서 "무엇을 올렸는지" 한글/워드로 직접
+   * 열어 확인할 수 있어야 한다.
+   */
+  http.get("/api/templates/:templateId/file", async ({ params }) => {
+    await delay(220);
+    const id = Number(params.templateId);
+    const t = db.getFormTemplate(id);
+    if (!t) return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    const raw = db.getTemplateRawFile(id);
+    if (!raw)
+      return err(
+        404,
+        "FILE_NOT_AVAILABLE",
+        "원본 파일을 내려받을 수 없습니다.",
+      );
+    const ext = t.fileName.toLowerCase().endsWith(".hwpx") ? "hwpx" : "docx";
+    return new HttpResponse(raw, {
+      headers: {
+        "Content-Type": MEDIA_TYPE[ext],
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(t.fileName)}`,
+      },
+    });
+  }),
+
+  // ===== 완성 문서 파일 (EP-036·038) =====
+
+  http.post("/api/documents/:documentId/file", async ({ params }) => {
+    // 실서버는 서식을 실제로 채우느라 몇 초 걸린다 — 진행 표시를 확인할 만큼 준다.
+    await delay(1400);
+    const id = Number(params.documentId);
+    const target = db.resolveDocId(id);
+    if (!target)
+      return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    const res = db.renderDocumentFile(target.type, target.childId, target.date);
+    if (!res.ok) {
+      if (res.code === "NOT_CONFIRMED")
+        return err(409, "NOT_CONFIRMED", "먼저 검토·확정하세요.");
+      return err(
+        409,
+        "NO_ACTIVE_TEMPLATE",
+        "이 문서 종류에 등록된 양식이 없습니다. 양식을 올리고 활성화한 뒤 다시 시도해 주세요.",
+      );
+    }
+    return HttpResponse.json({
+      document_id: id,
+      file_key: res.fileKey,
+      file_render_status: res.status,
+    });
+  }),
+
+  /**
+   * EP-036 다운로드 — JSON이 아니라 **파일 바이너리 스트림**이다.
+   *
+   * 서식이 .hwpx면 목도 **진짜 한글 파일**을 내려준다 — 원본 서식을 열어 칸을
+   * 채워 다시 묶는다(`db.documentFileBytes`). 한글에서 열어 칸 넘침·요일 배치를
+   * 검토하는 것이 이 기능의 목적이라, 평문을 .hwpx 이름으로 주면 검증이 안 된다.
+   * 서식을 열 수 없는 경우(.docx)에는 예전처럼 평문을 내려준다.
+   *
+   * 확장자·Content-Type·Content-Disposition은 **서버가 정한다** — 화면이 .docx로
+   * 고정하면 서식을 채운 .hwpx가 잘못된 이름으로 저장된다.
+   */
+  http.get("/api/documents/:documentId/file", async ({ params }) => {
+    await db.ensureSampleTemplates();
+    await delay(320);
+    const id = Number(params.documentId);
+    const target = db.resolveDocId(id);
+    if (!target)
+      return err(404, "NOT_FOUND", "요청한 자료를 찾을 수 없습니다.");
+    const doc = db.getDocByTarget(target.type, target.childId, target.date);
+    if (!doc?.fileKey)
+      return err(
+        404,
+        "FILE_NOT_AVAILABLE",
+        "아직 만들어진 문서 파일이 없습니다. 먼저 문서 만들기를 눌러 주세요.",
+      );
+    const ext = doc.fileKey.endsWith(".hwpx") ? "hwpx" : "docx";
+    // 확정 전 파일은 파일명에 「초안」을 박는다 — 초안을 확정본으로 믿고 제출하는
+    // 사고를 막는 표식이고, 화면도 같은 표식(`_preview`)을 보고 안내한다.
+    const draftMark = doc.fileKey.includes("_preview") ? "_초안" : "";
+    const filename = `${doc.label || "문서"}${draftMark}.${ext}`;
+    const filled = await db.documentFileBytes(
+      target.type,
+      target.childId,
+      target.date,
+    );
+    return new HttpResponse(filled ?? doc.working, {
+      headers: {
+        "Content-Type": MEDIA_TYPE[ext],
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      },
     });
   }),
 ];
+
+const SPEC_TO_TEMPLATE_DOC: Record<SpecTemplateDocType, TemplateDocType> = {
+  notice: "notice",
+  journal: "journal",
+  weekly_plan: "plan",
+  monthly_plan: "plan_monthly",
+  dev_eval: "evaluation",
+};
+
+/** 실서버 `docfill.media_type_for`와 같은 갈래 — 확장자가 타입을 정한다 */
+const MEDIA_TYPE: Record<"docx" | "hwpx", string> = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  hwpx: "application/hwp+zip",
+};

@@ -135,11 +135,18 @@ type RequestOptions = {
   skipAuth?: boolean;
 };
 
-async function request<T>(
+/**
+ * 인증·갱신·오류 변환까지 마친 `Response`를 그대로 돌려준다.
+ *
+ * 대부분의 응답은 JSON이라 `request()`가 감싸지만, EP-036(완성 문서 파일
+ * 다운로드)만은 **JSON이 아니라 파일 바이너리 스트림**이다. 본문을 어떻게 읽을지
+ * 만 호출측에 맡기고, 401 재시도·오류 규약은 한 곳에서 지킨다.
+ */
+async function rawRequest(
   path: string,
   init?: RequestInit,
   opts?: RequestOptions,
-): Promise<T> {
+): Promise<Response> {
   // 이 요청이 어느 토큰으로 나갔는지 기억해 둔다. 401을 받았을 때 그 사이에
   // 다른 요청이 이미 갱신했다면 또 갱신할 이유가 없다(명세 1.2.3 ④ "갱신은 한 번만").
   let sentWith: string | null = null;
@@ -199,9 +206,41 @@ async function request<T>(
     throw new ApiError(res.status, code, message);
   }
 
+  return res;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOptions,
+): Promise<T> {
+  const res = await rawRequest(path, init, opts);
   // 204 No Content 등 본문이 없는 성공 응답 방어
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** 다운로드 한 건 — 파일 내용과 서버가 정한 파일명 */
+export type DownloadedFile = { blob: Blob; filename: string };
+
+/**
+ * `Content-Disposition`에서 파일명을 뽑는다.
+ *
+ * 서버는 한글 파일명 때문에 RFC 5987 형식(`filename*=UTF-8''…`)으로 보낸다.
+ * 예전 형식(`filename="…"`)도 함께 본다 — 프록시가 헤더를 바꿔 놓을 수 있다.
+ */
+function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1].trim());
+    } catch {
+      /* 인코딩이 깨졌으면 아래 평문 형식으로 넘어간다 */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  return plain ? plain[1].trim() : null;
 }
 
 /** 명세 5절: 목록 응답 봉투 */
@@ -222,6 +261,57 @@ export const api = {
   /** 파일 업로드 — 명세 6.1 "파일 업로드는 multipart/form-data" (EP-016 등) */
   postForm: <T>(path: string, form: FormData, opts?: RequestOptions) =>
     request<T>(path, { method: "POST", body: form }, opts),
+  /**
+   * 파일 다운로드 — EP-036. 응답이 JSON이 아니라 바이너리다.
+   *
+   * 확장자는 **고정할 수 없다**: 서식을 채운 결과는 `.hwpx`, 평문 폴백은
+   * `.docx`이고 Content-Type도 서버가 확장자로 갈라 준다(`docfill.media_type_for`).
+   * 그래서 파일명도 우리가 짓지 않고 `Content-Disposition`에서 받아 쓴다.
+   */
+  getFile: async (
+    path: string,
+    opts?: RequestOptions,
+  ): Promise<DownloadedFile> => {
+    const res = await rawRequest(path, undefined, opts);
+    return {
+      blob: await res.blob(),
+      filename:
+        filenameFromDisposition(res.headers.get("Content-Disposition")) ??
+        "document",
+    };
+  },
+  /**
+   * 만들면서 곧바로 파일을 받는 POST — 보육일지 생성(EP-010)이 쓴다.
+   *
+   * 그 문서는 화면 안의 검토 단계가 없어 응답이 JSON이 아니라 완성 한글 파일이다.
+   * 만들어진 문서의 `document_id`는 바디에 실을 수 없어 `X-Document-Id` 헤더로
+   * 온다(서버 CORS `expose_headers`에 등록돼 있어야 읽힌다).
+   *
+   * 오류는 여전히 JSON 봉투다 — `rawRequest`가 이미 `ApiError`로 바꿔 던지므로
+   * 여기서 성공 응답만 다루면 된다.
+   */
+  postFile: async (
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+  ): Promise<DownloadedFile & { documentId: number | null }> => {
+    const res = await rawRequest(
+      path,
+      {
+        method: "POST",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+      opts,
+    );
+    const id = Number(res.headers.get("X-Document-Id"));
+    return {
+      blob: await res.blob(),
+      filename:
+        filenameFromDisposition(res.headers.get("Content-Disposition")) ??
+        "document",
+      documentId: Number.isFinite(id) && id > 0 ? id : null,
+    };
+  },
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>(
       path,

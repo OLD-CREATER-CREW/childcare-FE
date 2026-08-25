@@ -1,0 +1,280 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  PencilLine,
+} from "lucide-react";
+import { useSaveDocumentCells, useTemplate } from "@/lib/queries";
+import { Notice } from "@/components/ui";
+import type { DocType, DocumentCell } from "@/lib/types";
+
+/**
+ * 칸 단위 검토·수정 — 원본 서식의 칸을 그대로 늘어놓는다.
+ *
+ * 왜 표로 그리지 않는가: 표 구조(행·열·병합)는 문서가 아니라 **템플릿**에 속하고
+ * (`GET /api/templates/{id}`), 실물 서식은 29행 9열에 병합이 얽혀 있어 화면에
+ * 재현하면 각 칸이 두세 글자 폭으로 찌그러진다. 교사가 여기서 하는 일은 표를
+ * 보는 게 아니라 **AI가 쓴 문장을 고치는 것**이라, 라벨 + 넓은 편집창이 낫다.
+ * 원본 배치는 완성 파일(EP-036)에서 그대로 보인다.
+ *
+ * 저장은 `PUT /api/documents/{id}/draft`에 **바뀐 칸만** 보낸다 — 서버가 병합한다.
+ */
+export function DocumentCells({
+  type,
+  childId,
+  date = null,
+  cells,
+  templateId,
+  editable,
+}: {
+  type: DocType;
+  childId: string | null;
+  /** 날짜 단위 문서(보육일지)에서 고른 날 — 저장이 그 날 문서로 가야 한다 */
+  date?: string | null;
+  cells: DocumentCell[];
+  templateId: number | null;
+  /** 확정 후에는 읽기 전용이다 */
+  editable: boolean;
+}) {
+  const saveMutation = useSaveDocumentCells();
+  // 표 구조는 문서마다 다시 받지 않는다 — 템플릿에서 한 번 받아 캐시한다.
+  const templateQuery = useTemplate(templateId);
+
+  /** 편집 중인 값. 서버 값이 도착해도 타이핑을 덮지 않도록 화면이 들고 있는다. */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // 아이·날짜·문서가 바뀌면 편집 중이던 값은 남아 있으면 안 된다.
+  useEffect(() => {
+    setDrafts({});
+  }, [type, childId, date]);
+
+  useEffect(() => {
+    const pending = timers.current;
+    return () => Object.values(pending).forEach(clearTimeout);
+  }, []);
+
+  const valueOf = (c: DocumentCell) => drafts[c.key] ?? c.text;
+
+  const onEdit = (key: string, next: string) => {
+    setDrafts((d) => ({ ...d, [key]: next }));
+    clearTimeout(timers.current[key]);
+    // 칸마다 따로 디바운스한다 — 한 칸을 고치는 동안 다른 칸까지 저장하면
+    // 방금 서버가 준 값으로 되돌아가는 칸이 생긴다.
+    timers.current[key] = setTimeout(() => {
+      saveMutation.mutate(
+        { type, childId, cells: { [key]: next }, date },
+        {
+          onSuccess: () => {
+            setSavedKey(key);
+            setTimeout(() => setSavedKey((k) => (k === key ? null : k)), 1600);
+          },
+        },
+      );
+    }, 800);
+  };
+
+  const aiCells = cells.filter((c) => c.source !== "template");
+  const emptyCount = aiCells.filter((c) => !valueOf(c).trim()).length;
+  const structure = templateQuery.data?.structure ?? null;
+
+  /*
+    서식 원형 칸 중 **내용이 비어 있는 것은 그리지 않는다.**
+
+    실물 주간보육일지에서 `월 / 놀이 평가 및 지원 계획` 같은 라벨은 칸 두 개로
+    나뉜다 — 행 이름을 담은 칸(col 1)과 교사가 쓰는 칸(col 3)이다. 앞쪽은 서버가
+    채우지 않으므로 늘 빈 `template` 칸으로 내려오는데, 이걸 카드로 그리면 35칸짜리
+    문서에서 "비어 있는 칸입니다"만 반복하는 카드가 다섯 장 생겨 정작 읽어야 할
+    칸을 밀어낸다. 교사가 검토할 것도, 고칠 것도 없는 칸이다.
+
+    문안이 **있는** `template` 칸은 남긴다 — 서식에 인쇄된 정형 문구라 완성 문서에
+    그대로 나가므로, 무엇이 실릴지 볼 수 있어야 한다.
+  */
+  const visibleCells = cells.filter(
+    (c) => c.source !== "template" || c.text.trim() !== "",
+  );
+  const hiddenCount = cells.length - visibleCells.length;
+  /*
+    서식 문구 칸은 **접어 둔다.**
+
+    실물 주간보육일지는 칸이 69개인데 그중 교사가 볼 것은 22개다. 나머지는 등원·
+    간식·점심처럼 해마다 그대로 나가는 인쇄 문구라, 문서 순서대로 늘어놓으면
+    검토할 칸이 40여 장의 카드 사이에 흩어진다. 검토 범위를 좁히려고 붙인 표식
+    (`source`)이 정작 화면에서는 아무것도 좁혀 주지 못했다.
+
+    지우지는 않는다 — 완성 문서에 그대로 실리는 글이라 무엇이 나갈지 볼 수 있어야
+    한다. 기본은 접힘, 펼치면 원래대로 보인다.
+  */
+  const editCells = visibleCells.filter((c) => c.source !== "template");
+  const printedCells = visibleCells.filter((c) => c.source === "template");
+  const [printedOpen, setPrintedOpen] = useState(false);
+
+  return (
+    <div className="stack">
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+        <span className="badge-ai">
+          <Bot size={12} /> 칸 {aiCells.length}개
+        </span>
+        {structure && (
+          <span>
+            원본 서식 표 {structure.tables.length}개 · 칸{" "}
+            {structure.cells.length}개
+          </span>
+        )}
+        {hiddenCount > 0 && (
+          <span title="서식의 행 이름 칸 — 교사가 쓸 내용이 없습니다">
+            · 서식 라벨 칸 {hiddenCount}개는 숨김
+          </span>
+        )}
+        <span className="ml-auto">
+          라벨은 서식의 <b>행/열 이름</b>에서 나옵니다
+        </span>
+      </div>
+
+      {/*
+        칸이 비어 오는 일이 간헐적으로 있다(모델이 형식을 벗어나면 서버가 재시도
+        하지만 100%는 아니다). 화면이 깨지지 않는 것에 더해, 교사가 **어디를 채워야
+        하는지** 알 수 있어야 한다.
+      */}
+      {emptyCount > 0 && (
+        <Notice kind="warn">
+          내용이 비어 있는 칸이 {emptyCount}개 있습니다 — 아래에서 직접 채우거나
+          「다시 생성」을 눌러 주세요. 빈 칸이 있어도 확정·문서 만들기는 됩니다.
+        </Notice>
+      )}
+
+      {editCells.map((c) => (
+        <CellCard
+          key={c.key}
+          cell={c}
+          value={valueOf(c)}
+          locked={!editable || !c.editable}
+          saved={savedKey === c.key}
+          onEdit={onEdit}
+        />
+      ))}
+
+      {printedCells.length > 0 && (
+        <div className="card">
+          <button
+            className="flex w-full items-center gap-2 text-left text-[13px] font-semibold text-ink"
+            onClick={() => setPrintedOpen((v) => !v)}
+            aria-expanded={printedOpen}
+          >
+            {printedOpen ? (
+              <ChevronDown size={15} />
+            ) : (
+              <ChevronRight size={15} />
+            )}
+            서식에 인쇄된 문구 {printedCells.length}개
+            <span className="hint ml-1">
+              고치지 않습니다 — 완성 문서에 그대로 나갑니다
+            </span>
+          </button>
+
+          {printedOpen && (
+            <div className="stack mt-3">
+              {printedCells.map((c) => (
+                <CellCard
+                  key={c.key}
+                  cell={c}
+                  value={valueOf(c)}
+                  locked
+                  saved={false}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 칸 하나 — 라벨·출처·편집창. 서식 문구 칸은 잠긴 채 같은 모양으로 보인다. */
+function CellCard({
+  cell,
+  value,
+  locked,
+  saved,
+  onEdit,
+}: {
+  cell: DocumentCell;
+  value: string;
+  locked: boolean;
+  saved: boolean;
+  onEdit: (key: string, next: string) => void;
+}) {
+  return (
+    <div className="card">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-[13px] font-semibold text-ink">
+          {cell.label || "(라벨 없음)"}
+        </span>
+        <CellSourceTag source={cell.source} />
+        <span className="font-mono text-[11px] text-muted">{cell.key}</span>
+        {saved && (
+          <span className="ml-auto text-[11.5px] font-semibold text-confirm">
+            저장됨 ✓
+          </span>
+        )}
+      </div>
+
+      {locked ? (
+        <div className="draftbox confirmed whitespace-pre-wrap text-[14px] leading-[1.85]">
+          {value || (
+            <span className="text-[13px] text-muted">
+              비어 있는 칸입니다 — 서식 원형을 그대로 둡니다.
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="draftbox">
+          <textarea
+            value={value}
+            onChange={(e) => onEdit(cell.key, e.target.value)}
+            rows={Math.max(2, Math.ceil(value.length / 45))}
+            placeholder="이 칸은 비어 있습니다 — 직접 채워 주세요"
+            className="w-full resize-y border-0 bg-transparent text-[14px] leading-[1.85] [font-family:inherit] focus:outline-none"
+            aria-label={`${cell.label} 칸 편집`}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 이 글이 어디서 왔는지를 칸마다 밝힌다.
+ *
+ * 교사의 검토 범위를 좁히는 장치다 — `template` 칸은 서식에 인쇄된 정형 문구라
+ * 읽을 필요가 없고, `ai` 칸만 사실과 대조하면 된다.
+ */
+function CellSourceTag({ source }: { source: DocumentCell["source"] }) {
+  if (source === "template")
+    return (
+      <span className="tag" title="서식에 인쇄된 문구 — 수정하지 않습니다">
+        <Lock size={10} className="mr-0.5 inline" />
+        서식 문구
+      </span>
+    );
+  if (source === "teacher")
+    return (
+      <span className="tag manual">
+        <PencilLine size={10} className="mr-0.5 inline" />
+        직접 수정함
+      </span>
+    );
+  return (
+    <span className="tag dom">
+      <Bot size={10} className="mr-0.5 inline" />
+      AI 작성
+    </span>
+  );
+}

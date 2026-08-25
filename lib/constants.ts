@@ -85,3 +85,34 @@ export const ACTIVITY_PRESETS = [
   "물놀이",
   "산책",
 ];
+
+/**
+ * 날짜 선택지 — 오늘부터 뒤로 `days`일.
+ *
+ * 하루 기록(SCR-003)과 보육일지(SCR-006)가 같은 목록을 쓴다. 두 화면이 서로 다른
+ * 목록을 들고 있으면 "기록을 남긴 날"과 "일지를 쓰는 날"이 어긋난다.
+ */
+export function recentDateOptions(
+  days = 14,
+): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = [];
+  const cursor = localToday();
+  for (let i = 0; i < days; i += 1) {
+    const value = formatISODate(cursor);
+    out.push({
+      value,
+      label: `${value} (${WEEKDAY_KO[cursor.getDay()]})${i === 0 ? " · 오늘" : ""}`,
+    });
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return out;
+}
+
+export const DATE_OPTIONS = recentDateOptions(14);
+
+/** `2026-08-24 (월)` — 화면 문구에 쓰는 날짜 표기 */
+export const dateLabel = (iso: string): string => {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return `${iso} (${WEEKDAY_KO[new Date(y, m - 1, d).getDay()]})`;
+};
