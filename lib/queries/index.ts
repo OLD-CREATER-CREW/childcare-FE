@@ -39,6 +39,8 @@ export const queryKeys = {
   checklist: ["checklist"] as const,
   metrics: ["metrics", "summary"] as const,
   settings: ["settings"] as const,
+  /** EP-052 — 기관이 쓰던 문서(문체 예시). 문서 종류마다 따로다. */
+  styleSamples: (type: DocType) => ["style-samples", type] as const,
   /** SCR-016 — 재원/퇴소 필터가 다르면 다른 목록이다 */
   childRoster: (status: ChildStatus | "all") =>
     ["children", "roster", status] as const,
@@ -690,6 +692,30 @@ export const useGenerateAllNotices = () => {
 
 export const useSetReplayMode = () =>
   useMutation({ mutationFn: (on: boolean) => apiFn.setReplayMode(on) });
+
+/** EP-052 — 등록된 문체 예시. 빈 배열이면 "아직 등록하지 않음"이다. */
+export const useStyleSamples = (type: DocType) =>
+  useQuery({
+    queryKey: queryKeys.styleSamples(type),
+    queryFn: () => apiFn.fetchStyleSamples(type),
+  });
+
+/**
+ * EP-053 — 문체 예시 저장.
+ *
+ * 저장하면 **아직 확정하지 않은 초안**이 옛 문체로 남는다. 다시 만들 때 새
+ * 예시가 반영되도록 초안 캐시를 버린다(양식 동기화와 같은 이유).
+ */
+export const useSaveStyleSamples = (type: DocType) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (samples: string[]) => apiFn.saveStyleSamples(type, samples),
+    onSuccess: (saved) => {
+      qc.setQueryData(queryKeys.styleSamples(type), saved);
+      qc.invalidateQueries({ queryKey: ["documents", "draft", type] });
+    },
+  });
+};
 
 export const useSyncTemplates = () => {
   const qc = useQueryClient();

@@ -112,8 +112,10 @@ export function PhotoFolderBar({
       {root.needsPermission && (
         <div className="mt-3">
           <Notice kind="warn">
-            앱을 다시 켜면서 폴더 권한이 풀렸습니다. <b>폴더 다시 연결</b>을
-            누르면 같은 폴더를 그대로 씁니다.
+            <span>
+              앱을 다시 켜면서 폴더 권한이 풀렸습니다. <b>폴더 다시 연결</b>을
+              누르면 같은 폴더를 그대로 씁니다.
+            </span>
           </Notice>
         </div>
       )}

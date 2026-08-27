@@ -1281,6 +1281,34 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
   };
 };
 
+// ---------- 문체 예시 (EP-052/053) ----------
+//
+// 기관이 예전에 쓰던 문서 본문. 알림장 초안이 그 원의 말투를 따라가게 하려고
+// 프롬프트 고정부에 실린다(백엔드 `services/style_samples.py`).
+//
+// 서버는 저장하기 전에 아동·교사 이름을 가리므로 **응답이 요청과 다를 수
+// 있다.** 화면은 응답을 그대로 다시 그려야 교사가 무엇이 지워졌는지 본다.
+
+export const fetchStyleSamples = async (type: DocType): Promise<string[]> => {
+  const r = await api.get<{ type: string; samples: string[] }>(
+    `/style-samples?type=${encodeURIComponent(type)}`,
+  );
+  return r.samples ?? [];
+};
+
+export const saveStyleSamples = async (
+  type: DocType,
+  samples: string[],
+): Promise<string[]> => {
+  // 빈 칸은 여기서 걷어낸다 — 서버도 걸러 내지만, 보낸 것과 돌려받은 것의
+  // 개수가 달라지면 화면이 칸을 다시 그리며 커서가 튄다.
+  const r = await api.put<{ type: string; samples: string[] }>("/style-samples", {
+    type,
+    samples: samples.map((t) => t.trim()).filter(Boolean),
+  });
+  return r.samples ?? [];
+};
+
 // ---------- 설정·시드 (EP-029~031) + 로컬 양식 동기화 ----------
 
 export const fetchSettings = async (): Promise<AppSettings> => {

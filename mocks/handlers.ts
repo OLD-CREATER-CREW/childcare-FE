@@ -274,6 +274,9 @@ const unauthorized = () =>
 
 // ---------- 핸들러 ----------
 
+/** 문체 예시 목 저장소(EP-052/053). 새로고침하면 사라진다. */
+const styleSamples: Record<string, string[]> = {};
+
 export const handlers = [
   // ===== 인증 (EP-001~003, EP-050·051) =====
   //
@@ -1023,6 +1026,28 @@ export const handlers = [
   http.get("/api/metrics/summary", async () => {
     await delay(340);
     return HttpResponse.json(db.getMetricsSpec());
+  }),
+
+  // ===== 문체 예시 (EP-052/053) =====
+  //
+  // 목은 메모리에만 담는다. 마스킹도 흉내만 낸다 — 여기서 확인하려는 것은
+  // 화면 흐름(등록 → 개수 표시 → 고치기)이지 비식별화 규칙이 아니다.
+  http.get("/api/style-samples", async ({ request }) => {
+    await delay(120);
+    const type = new URL(request.url).searchParams.get("type") ?? "notice";
+    return HttpResponse.json({ type, samples: styleSamples[type] ?? [] });
+  }),
+
+  http.put("/api/style-samples", async ({ request }) => {
+    await delay(220);
+    const body = (await request.json()) as { type: string; samples: string[] };
+    const cleaned = (body.samples ?? [])
+      .map((t) => (t ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (cleaned.length === 0) delete styleSamples[body.type];
+    else styleSamples[body.type] = cleaned;
+    return HttpResponse.json({ type: body.type, samples: cleaned });
   }),
 
   // ===== 설정·시드 (EP-029~031) =====
