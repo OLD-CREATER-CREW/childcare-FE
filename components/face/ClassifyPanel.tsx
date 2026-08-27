@@ -17,6 +17,12 @@
  * 서버는 추론 후 사진을 폐기하고 아무것도 저장하지 않는다. 학부모 공유는 교사가
  * 키즈노트에 직접 올리므로, 마지막 단계는 발송이 아니라 폴더로 내보내기다.
  *
+ * ■ 내보낼 곳은 **설정된 사진 폴더**다 (2026-08 변경)
+ * 예전에는 내보낼 때마다 폴더 선택창을 띄웠다. 교사의 사진은 늘 같은 자리에
+ * 있는데 분류할 때마다 그 자리를 다시 찾아 주는 셈이라, 화면 위쪽에서 한 번
+ * 정한 폴더(`lib/face/photoRoot.ts`)로 바로 쓴다. 다른 곳에 넣고 싶으면 위의
+ * 「폴더 바꾸기」로 자리를 옮긴다 — 내보내기 버튼이 묻지 않는다.
+ *
  * ■ 내보내기 구조: 아이 이름 / 촬영일자
  *     손승현/2010-05-16/IMG_0421.jpg
  *     손승현/2011-06-20/IMG_0899.jpg
@@ -42,7 +48,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { useApp } from "@/lib/store";
 import { classifyPhoto, formatDate, readPhotoDate } from "@/lib/face";
-import type { EmbeddingB64, UseGalleryResult } from "@/lib/face";
+import type { EmbeddingB64, PhotoRootState, UseGalleryResult } from "@/lib/face";
 import type { Child } from "@/lib/types";
 import {
   Avatar,
@@ -135,9 +141,12 @@ const TAB_UNMATCHED = "__unmatched__";
 export function ClassifyPanel({
   kids,
   gallery,
+  photoRoot,
 }: {
   kids: Child[];
   gallery: UseGalleryResult;
+  /** 내보낼 곳. 화면 위쪽에서 한 번 정해 앱이 기억한다 */
+  photoRoot: PhotoRootState;
 }) {
   const { toast } = useApp();
   const [shots, setShots] = useState<Shot[]>([]);
@@ -454,21 +463,25 @@ export function ClassifyPanel({
    * 행사 사진을 찾을 수 없다. 촬영일자로 나누면 그대로 행사 단위가 된다.
    */
   const runExport = async (targets: Shot[]) => {
-    const picker = (window as PickerWindow).showDirectoryPicker;
-    if (!picker) {
-      toast(
-        "이 브라우저에서는 폴더 저장을 지원하지 않습니다 — 데스크톱 앱에서 실행하세요.",
-      );
-      return;
-    }
     if (targets.length === 0) return;
 
-    let root: DirHandle;
-    try {
-      root = await picker();
-    } catch {
-      return; // 사용자가 폴더 선택을 취소한 것 — 조용히 끝낸다
+    if (!photoRoot.handle) {
+      toast("먼저 위에서 사진 폴더를 정해 주세요 — 그 폴더로 내보냅니다.");
+      return;
     }
+
+    // 앱을 다시 켜면 권한이 풀려 있을 수 있다. 여기는 버튼 클릭 안이라
+    // (사용자 몸짓) 브라우저가 권한 요청을 받아 준다 — 다른 자리에서 부르면
+    // 조용히 거부된다.
+    if (photoRoot.needsPermission) {
+      const ok = await photoRoot.reconnect();
+      if (!ok) {
+        toast("폴더 권한을 받지 못했습니다 — 위에서 폴더를 다시 지정해 주세요.");
+        return;
+      }
+    }
+
+    const root = photoRoot.handle as unknown as DirHandle;
 
     setExporting(true);
     const used = new Map<string, Set<string>>();
@@ -516,7 +529,7 @@ export function ClassifyPanel({
       );
       setSel([]);
       toast(
-        `${written}개 파일을 아이별 · 날짜별 폴더로 내보냈습니다 (${used.size}개 폴더)`,
+        `${photoRoot.label ?? "사진 폴더"} 안에 ${written}개 파일을 아이별 · 날짜별로 내보냈습니다 (${used.size}개 폴더)`,
       );
     } catch {
       toast("내보내기에 실패했습니다. 폴더 쓰기 권한을 확인하세요.");
@@ -920,7 +933,12 @@ export function ClassifyPanel({
             <button
               className="btn primary"
               onClick={exportSelected}
-              disabled={exporting || sel.length === 0}
+              disabled={exporting || sel.length === 0 || !photoRoot.handle}
+              title={
+                photoRoot.handle
+                  ? undefined
+                  : "위에서 사진 폴더를 정하면 그 폴더로 내보냅니다"
+              }
             >
               <N n={4} />
               <FolderDown size={14} />
@@ -931,7 +949,14 @@ export function ClassifyPanel({
             <span className="text-[12.5px] text-muted">
               <N n={5} />
               미분류 사진을 누르면 아이를 직접 지정할 수 있어요 ·{" "}
-              <b>아이 이름 / 촬영일자</b> 폴더로 저장됩니다
+              {photoRoot.label ? (
+                <>
+                  <b>{photoRoot.label}</b> 안에 <b>아이 이름 / 촬영일자</b>{" "}
+                  폴더로 저장됩니다
+                </>
+              ) : (
+                <>위에서 사진 폴더를 먼저 정해 주세요</>
+              )}
             </span>
           </div>
         </div>

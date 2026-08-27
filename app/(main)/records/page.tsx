@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, ChevronRight, Mic, Paperclip } from "lucide-react";
+import { CheckCircle2, ChevronRight } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { ACTIVITY_PRESETS, DATE_OPTIONS, TODAY } from "@/lib/constants";
 import {
@@ -146,6 +146,60 @@ function RecordForm() {
         ? f.activities.filter((x) => x !== a)
         : [...f.activities, a],
     }));
+
+  // --- 활동 직접 입력 -------------------------------------------------------
+  //
+  // 키워드 여덟 개로는 그날 실제로 한 놀이를 담지 못한다("두꺼비집", "물총",
+  // "재활용품 만들기"). 그렇다고 자유 서술로 되돌리면 문서 생성이 쓰기 어려운
+  // 긴 문장을 받게 되므로, **낱말 단위 태그**로 받는다 — 키워드를 누르는 것과
+  // 같은 모양의 값이 되어 뒷단은 아무것도 달라지지 않는다.
+  const [actDraft, setActDraft] = useState("");
+  const actInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * 적은 것을 태그로 굳힌다.
+   *
+   * 쉼표를 걷어내는 이유: 저장할 때 활동을 `", "`로 이어 붙이고 읽을 때 다시
+   * 쉼표로 쪼갠다(`lib/api/spec.ts`). 태그 안에 쉼표가 들어가면 다음에 불러올 때
+   * 한 활동이 둘로 갈라진다. 쉼표를 넣는 것은 대개 여러 개를 한 번에 적으려는
+   * 뜻이므로, **거기서 끊어 각각 태그로 만든다.**
+   */
+  const commitAct = (raw = actDraft) => {
+    const parts = raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (parts.length === 0) {
+      setActDraft("");
+      return;
+    }
+    setForm((f) => {
+      const next = [...f.activities];
+      parts.forEach((t) => {
+        if (!next.includes(t)) next.push(t);
+      });
+      return { ...f, activities: next };
+    });
+    setActDraft("");
+  };
+
+  const removeAct = (a: string) =>
+    setForm((f) => ({ ...f, activities: f.activities.filter((x) => x !== a) }));
+
+  const onActKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // 한글은 조합 중에도 Enter가 온다. 조합이 끝나기 전에 굳히면 "ㄱ"만 남는다.
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitAct();
+      return;
+    }
+    // 빈 칸에서 지우기를 누르면 마지막 태그를 떼어 낸다 — 태그 입력칸의 관례다.
+    if (e.key === "Backspace" && actDraft === "" && form.activities.length > 0) {
+      e.preventDefault();
+      removeAct(form.activities[form.activities.length - 1]);
+    }
+  };
 
   const buildInput = () => ({ childId, date, ...form });
 
@@ -293,19 +347,60 @@ function RecordForm() {
                     <N n={2} />
                     활동{" "}
                     <span className="font-normal">
-                      — 자주 쓰는 키워드로 빠르게(자유 서술 최소화)
+                      — 적고 Enter를 누르면 태그가 됩니다
                     </span>
                   </label>
-                  <div className="chiprow">
-                    {ACTIVITY_PRESETS.map((a) => (
-                      <button
-                        key={a}
-                        className={`chip ${form.activities.includes(a) ? "on" : ""}`}
-                        onClick={() => toggleAct(a)}
-                      >
+
+                  {/* 고른 활동은 여기 모인다. 키워드로 넣든 손으로 적든 같은
+                      자리에 쌓여야, 지금 무엇이 담겼는지 한눈에 보인다. */}
+                  <div
+                    className="tagbox"
+                    onClick={(e) => {
+                      // 빈 곳을 눌러도 바로 적을 수 있게 — 입력칸이 좁아서
+                      // 정확히 겨냥해야 하면 손이 많이 간다.
+                      if (e.target === e.currentTarget) actInputRef.current?.focus();
+                    }}
+                  >
+                    {form.activities.map((a) => (
+                      <span key={a} className="tag-pill">
                         {a}
-                      </button>
+                        <button
+                          type="button"
+                          aria-label={`${a} 지우기`}
+                          onClick={() => removeAct(a)}
+                        >
+                          ×
+                        </button>
+                      </span>
                     ))}
+                    <input
+                      ref={actInputRef}
+                      value={actDraft}
+                      onChange={(e) => setActDraft(e.target.value)}
+                      onKeyDown={onActKeyDown}
+                      onBlur={() => commitAct()}
+                      placeholder={
+                        form.activities.length ? "" : "활동을 적고 Enter"
+                      }
+                      aria-label="활동 추가"
+                    />
+                  </div>
+
+                  <div className="mt-2.5">
+                    <div className="mb-1.5 text-[12px] text-muted">
+                      자주 쓰는 키워드
+                    </div>
+                    <div className="chiprow">
+                      {ACTIVITY_PRESETS.map((a) => (
+                        <button
+                          key={a}
+                          className={`chip ${form.activities.includes(a) ? "on" : ""}`}
+                          onClick={() => toggleAct(a)}
+                        >
+                          {a}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -377,17 +472,25 @@ function RecordForm() {
                   </div>
                 </div>
 
-                <div className="field">
+                {/* 이름이 「특이사항 메모」였을 때는 특별한 일이 있을 때만
+                    적는 칸으로 읽혀 대부분 비어 있었다. 이 칸이 발달영역
+                    태깅(FN-010)과 알림장 문장의 원료라, 비면 앱 전체의 재료가
+                    줄어든다. 이름을 넓히고 칸도 함께 넓힌다. */}
+                <div className="field mb-0">
                   <label>
                     <N n={5} />
-                    특이사항 메모{" "}
+                    메모 기록{" "}
                     <span className="font-normal">
                       — 발달영역 자동 태깅(FN-010)의 원료
                     </span>
                   </label>
                   <textarea
-                    className="input"
-                    placeholder="예: 친구와 장난감 두고 다툼, 금방 화해"
+                    className="input min-h-[168px]"
+                    rows={6}
+                    placeholder={
+                      "예: 모래놀이터에서 두꺼비집을 만들다가 무너지자 다시 쌓음.\n" +
+                      "옆에 있던 지호가 물을 떠다 부어 주자 함께 웃으며 이어 감."
+                    }
                     value={form.memo}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, memo: e.target.value }))
@@ -395,28 +498,6 @@ function RecordForm() {
                   />
                 </div>
 
-                <div className="field mb-0">
-                  <label>
-                    <N n={6} />
-                    사진·음성 첨부
-                  </label>
-                  <div className="inline">
-                    <button
-                      className="btn"
-                      onClick={() =>
-                        toast("사진은 사진함 분류(FN-006)로 연결됩니다")
-                      }
-                    >
-                      <Paperclip size={14} /> 파일 선택
-                    </button>
-                    <button
-                      className="btn"
-                      onClick={() => toast("녹음은 프로토타입 범위 밖입니다")}
-                    >
-                      <Mic size={14} /> 녹음
-                    </button>
-                  </div>
-                </div>
               </>
             )}
           </div>
@@ -427,7 +508,7 @@ function RecordForm() {
               onClick={() => save()}
               disabled={saveMutation.isPending || recordQuery.isLoading}
             >
-              <N n={7} />
+              <N n={6} />
               {saveMutation.isPending ? "저장 중…" : "저장"}
             </button>
             {nextUnrecorded && (
@@ -445,7 +526,7 @@ function RecordForm() {
               onClick={saveAndDraft}
               disabled={saveMutation.isPending || recordQuery.isLoading}
             >
-              <N n={8} />
+              <N n={7} />
               저장하고 알림장 초안 만들기
             </button>
           </div>

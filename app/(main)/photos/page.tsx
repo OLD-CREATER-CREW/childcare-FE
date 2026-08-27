@@ -26,7 +26,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { useChildRoster } from "@/lib/queries";
 import { useApp } from "@/lib/store";
-import { faceHealth, galleryKey, useGallery } from "@/lib/face";
+import { faceHealth, galleryKey, useGallery, usePhotoRoot } from "@/lib/face";
 import {
   N,
   Notice,
@@ -39,6 +39,7 @@ import {
 import { ClassifyPanel } from "@/components/face/ClassifyPanel";
 import { EnrollPanel } from "@/components/face/EnrollPanel";
 import { FolderPanel } from "@/components/face/FolderPanel";
+import { PhotoFolderBar } from "@/components/face/PhotoFolderBar";
 
 type Tab = "classify" | "enroll" | "browse";
 
@@ -50,6 +51,10 @@ export default function PhotosPage() {
   const [tab, setTab] = useState<Tab>("classify");
   const [className, setClassName] = useState("");
   const [serverDown, setServerDown] = useState<string | null>(null);
+
+  // 사진 폴더는 화면 하나가 아니라 **앱이** 기억한다. 분류한 사진을 내보낼 곳도,
+  // 폴더 보기가 훑을 곳도 여기다(`lib/face/photoRoot.ts`).
+  const photoRoot = usePhotoRoot();
 
   const classNames = useMemo(
     () =>
@@ -147,7 +152,7 @@ export default function PhotosPage() {
             ? "사진 올리기 → 아이별 자동 분류 → 선택 내보내기"
             : tab === "enroll"
               ? "아이별 사진 3~5장 → 반 갤러리 (임베딩은 이 PC에만 저장됩니다)"
-              : "이 PC의 폴더를 골라 사진만 훑어봅니다 — 분류하지 않습니다"
+              : "정해 둔 사진 폴더를 아이별·날짜별로 훑어봅니다 — 분류하지 않습니다"
         }
       />
       <SpecBar
@@ -191,6 +196,12 @@ export default function PhotosPage() {
             ⚠ <span>{gallery.error}</span>
           </Notice>
         )}
+
+        {/* 사진 폴더 — 두 탭과 놀이이야기가 함께 쓰는 한 자리 */}
+        <PhotoFolderBar
+          root={photoRoot}
+          hint="분류한 사진을 내보낼 곳이자, 폴더 보기가 훑을 곳입니다. 한 번 정하면 앱이 기억합니다."
+        />
 
         {/* ---------------- 반 · 갤러리 상태 · 탭 ---------------- */}
         <div className="card">
@@ -295,7 +306,7 @@ export default function PhotosPage() {
           두 패널이 같은 gallery 인스턴스를 받으므로 등록 즉시 분류 쪽에 반영된다.
         */}
         <div hidden={tab !== "classify"}>
-          <ClassifyPanel kids={kids} gallery={gallery} />
+          <ClassifyPanel kids={kids} gallery={gallery} photoRoot={photoRoot} />
         </div>
         <div hidden={tab !== "enroll"}>
           <EnrollPanel kids={kids} gallery={gallery} />
@@ -305,7 +316,7 @@ export default function PhotosPage() {
           kids 도 gallery 도 받지 않는다.
         */}
         <div hidden={tab !== "browse"}>
-          <FolderPanel />
+          <FolderPanel photoRoot={photoRoot} />
         </div>
       </div>
     </>

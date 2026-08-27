@@ -6,18 +6,17 @@ import { MONTH_FROM, MONTH_LABEL } from "@/lib/constants";
 import { useApp } from "@/lib/store";
 import { useChildren, useDocumentDraft } from "@/lib/queries";
 import {
-  FolderCancelledError,
-  FolderUnsupportedError,
   MAX_FOLDER_PHOTOS,
   WritePermissionDeniedError,
   draftDates,
   groupByDate,
-  pickPhotoFolder,
+  readDatedPhotos,
   recommendFolderName,
   revokeFolderPhotos,
   saveRecommended,
+  usePhotoRoot,
 } from "@/lib/face";
-import type { FolderPhoto, RootDirHandle } from "@/lib/face";
+import type { FolderPhoto } from "@/lib/face";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
 import { N, Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
 import type { PhotoSuggestion } from "@/lib/types";
@@ -254,9 +253,10 @@ function PhotoPanel({
   draft: string;
 }) {
   const { toast } = useApp();
-  const [root, setRoot] = useState<RootDirHandle | null>(null);
+  // 사진 폴더는 사진함에서 한 번 정해 두면 여기서도 그대로 쓴다
+  // (`lib/face/photoRoot.ts`). 예전에는 이 화면에서 또 골라야 했다.
+  const photoRoot = usePhotoRoot();
   const [photos, setPhotos] = useState<FolderPhoto[]>([]);
-  const [folderName, setFolderName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [sel, setSel] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -270,30 +270,29 @@ function PhotoPanel({
   const month = Number(MONTH_FROM.slice(5, 7));
   const outName = recommendFolderName(month);
 
-  const pick = async () => {
+  const rootHandle = photoRoot.handle;
+  const rootReady = photoRoot.ready;
+
+  /**
+   * 정해 둔 사진 폴더에서 후보를 읽는다.
+   *
+   * 예전에는 이 화면에서 폴더를 따로 골랐다. 사진함에서 방금 내보낸 그 폴더를
+   * 다시 찾아 주는 셈이라, 이제는 앱이 기억한 폴더를 그대로 읽는다.
+   */
+  const load = async () => {
+    if (!rootHandle) return;
     setLoading(true);
     try {
-      const picked = await pickPhotoFolder();
-      revokeFolderPhotos(photosRef.current); // 이전 선택분을 먼저 놓아준다
-      setRoot(picked.root);
-      setPhotos(picked.photos);
-      setFolderName(picked.folderName);
+      const found = await readDatedPhotos(rootHandle);
+      revokeFolderPhotos(photosRef.current); // 이전 것을 먼저 놓아준다
+      setPhotos(found.photos);
       setSel([]);
-      if (picked.photos.length === 0) {
+      if (found.photos.length === 0) {
         toast("날짜 폴더(YYYY-MM-DD) 안에서 사진을 찾지 못했습니다.");
-      } else if (picked.hitLimit) {
+      } else if (found.hitLimit) {
         toast(`사진이 많아 ${MAX_FOLDER_PHOTOS}장까지만 읽었습니다.`);
-      } else {
-        toast(`${picked.photos.length}장을 읽었습니다.`);
       }
     } catch (e) {
-      if (e instanceof FolderCancelledError) return; // 교사가 취소한 것
-      if (e instanceof FolderUnsupportedError) {
-        toast(
-          "이 브라우저에서는 폴더 읽기를 지원하지 않습니다 — 데스크톱 앱에서 실행하세요.",
-        );
-        return;
-      }
       // 실패 원인을 삼키지 않는다. "권한을 확인하세요"만 띄웠다가 정작 원인이
       // 코드 버그였던 적이 있다 — 무엇이 터졌는지 화면과 콘솔 양쪽에 남긴다.
       console.error("[사진 폴더] 읽기 실패:", e);
@@ -305,12 +304,18 @@ function PhotoPanel({
     }
   };
 
+  // 폴더가 준비되면(또는 바뀌면) 알아서 읽는다.
+  useEffect(() => {
+    if (rootReady) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootReady, rootHandle]);
+
   const save = async () => {
-    if (!root || sel.length === 0) return;
+    if (!rootHandle || sel.length === 0) return;
     const chosen = photos.filter((p) => sel.indexOf(p.id) >= 0);
     setSaving(true);
     try {
-      const { written } = await saveRecommended(root, chosen, outName);
+      const { written } = await saveRecommended(rootHandle, chosen, outName);
       toast(`${written}장을 「${outName}」 폴더에 모았습니다.`);
       setSel([]);
     } catch (e) {
@@ -399,25 +404,12 @@ function PhotoPanel({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <button
-          className="btn"
-          onClick={() => void pick()}
-          disabled={loading || saving}
-        >
-          {loading ? (
-            <>
-              <Loader2 size={14} className="animate-spin" /> 읽는 중…
-            </>
-          ) : (
-            <>
-              <FolderOpen size={14} />{" "}
-              {folderName ? "폴더 다시 고르기" : "사진 폴더 지정"}
-            </>
-          )}
-        </button>
-        {folderName && (
+        {photoRoot.label && (
           <span className="text-[12.5px] text-muted">
-            <b className="text-ink">{folderName}</b> · {photos.length}장
+            <code className="rounded-md border border-line bg-paper px-1.5 py-0.5 text-[11.5px] text-ink">
+              {photoRoot.label}
+            </code>{" "}
+            · {photos.length}장
             {matchedTotal > 0 && (
               <>
                 {" · "}
@@ -426,13 +418,47 @@ function PhotoPanel({
             )}
           </span>
         )}
+        {photoRoot.needsPermission ? (
+          <button
+            className="btn"
+            onClick={() => void photoRoot.reconnect()}
+            disabled={loading || saving}
+          >
+            <FolderOpen size={14} /> 폴더 다시 연결
+          </button>
+        ) : photoRoot.label ? (
+          <button
+            className="btn"
+            onClick={() => void load()}
+            disabled={loading || saving || !photoRoot.ready}
+          >
+            {loading ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> 읽는 중…
+              </>
+            ) : (
+              <>
+                <FolderOpen size={14} /> 새로 읽기
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            className="btn"
+            onClick={() => void photoRoot.choose()}
+            disabled={loading || saving || !photoRoot.supported}
+          >
+            <FolderOpen size={14} /> 사진 폴더 지정
+          </button>
+        )}
       </div>
 
-      {!folderName && (
+      {!photoRoot.label && (
         <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-          사진함에서 <b>내보내기</b>한 폴더를 지정하면, 그 안의{" "}
-          <code>아이이름/날짜</code> 구조를 읽어 소주제 날짜와 맞춰 드립니다.
-          사진은 이 PC를 벗어나지 않습니다.
+          사진함에서 정한 <b>사진 폴더</b>를 그대로 씁니다. 아직 안 정했다면 위
+          버튼으로 한 번만 정해 주세요 — 그 안의 <code>아이이름/날짜</code>{" "}
+          구조를 읽어 소주제 날짜와 맞춰 드립니다. 사진은 이 PC를 벗어나지
+          않습니다.
         </p>
       )}
 
@@ -498,7 +524,7 @@ function PhotoPanel({
       </p>
       {photos.length > 0 && (
         <p className="mt-1 text-[12.5px] text-muted">
-          고른 사진은 <b>{folderName}</b> 안에 <b>{outName}</b> 폴더를 만들어
+          고른 사진은 <b>{photoRoot.label}</b> 안에 <b>{outName}</b> 폴더를 만들어
           복사합니다. 원본은 그대로 두고, 서버에는 올라가지 않습니다.
         </p>
       )}

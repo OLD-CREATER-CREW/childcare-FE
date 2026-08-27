@@ -34,6 +34,8 @@ export {
   WritePermissionDeniedError,
   browsePhotoFolder,
   draftDates,
+  readAllPhotos,
+  readDatedPhotos,
   groupByDate,
   pickPhotoFolder,
   recommendFolderName,
@@ -42,3 +44,12 @@ export {
   saveRecommended,
 } from "./photoFolder";
 export type { BrowsedPhoto, FolderPhoto, RootDirHandle } from "./photoFolder";
+export {
+  canPickFolder,
+  choosePhotoRoot,
+  forgetPhotoRoot,
+  loadPhotoRoot,
+  reconnectPhotoRoot,
+  usePhotoRoot,
+} from "./photoRoot";
+export type { PhotoRootState } from "./photoRoot";

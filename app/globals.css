@@ -385,6 +385,40 @@
     @apply flex flex-wrap gap-2;
   }
 
+  /* 태그 입력칸 — 고른 것과 적는 곳이 한 상자 안에 있다.
+     둘을 떼어 놓으면 방금 적은 활동이 어디로 갔는지 눈으로 따라가야 한다. */
+  .tagbox {
+    @apply flex min-h-[46px] flex-wrap items-center gap-2 rounded-[10px] border border-line-strong bg-surface px-2.5 py-2;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+  .tagbox:hover {
+    border-color: #b3bfb2;
+  }
+  /* 안쪽 input에 초점이 가므로 테두리 강조는 상자가 대신 받는다 */
+  .tagbox:focus-within {
+    @apply border-green;
+    box-shadow: 0 0 0 3px rgba(46, 125, 82, 0.12);
+  }
+  .tagbox input {
+    @apply min-w-[150px] flex-1 border-0 bg-transparent px-1 py-0.5 text-sm text-ink;
+    outline: none;
+  }
+  .tagbox input::placeholder {
+    @apply text-faint;
+  }
+  .tag-pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-green bg-green-soft py-1 pl-3.5 pr-1.5 text-[13px] font-bold text-green-deep;
+  }
+  .tag-pill button {
+    @apply border-0 bg-transparent px-1 text-[15px] leading-none text-green-deep opacity-55;
+    transition: opacity 0.15s ease;
+  }
+  .tag-pill button:hover {
+    @apply opacity-100;
+  }
+
   /* 아바타 */
   .avatar {
     @apply grid flex-none place-items-center rounded-full font-bold text-white;

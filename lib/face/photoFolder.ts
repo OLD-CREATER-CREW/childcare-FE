@@ -37,18 +37,21 @@ type DirEntry =
   | { kind: "file"; name: string; getFile: () => Promise<File> }
   | { kind: "directory"; name: string; values: () => AsyncIterable<DirEntry> };
 type FileWriter = { write: (data: Blob) => Promise<void>; close: () => Promise<void> };
+/**
+ * 폴더 핸들. 하위 폴더도 같은 타입이라 재귀로 선언한다 — 내보내기가
+ * `아이 이름/촬영일자/` 두 겹을 만들기 때문이다(`ClassifyPanel.runExport`).
+ */
 export type RootDirHandle = {
   name: string;
   values: () => AsyncIterable<DirEntry>;
   getDirectoryHandle: (
     name: string,
     o?: { create?: boolean },
-  ) => Promise<{
-    getFileHandle: (
-      name: string,
-      o?: { create?: boolean },
-    ) => Promise<{ createWritable: () => Promise<FileWriter> }>;
-  }>;
+  ) => Promise<RootDirHandle>;
+  getFileHandle: (
+    name: string,
+    o?: { create?: boolean },
+  ) => Promise<{ createWritable: () => Promise<FileWriter> }>;
   queryPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
   requestPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
 };
@@ -94,6 +97,22 @@ export async function pickPhotoFolder(): Promise<{
     throw new FolderCancelledError();
   }
 
+  return { root, ...(await readDatedPhotos(root)) };
+}
+
+/**
+ * **이미 고른 폴더**를 읽는다. 고르는 일과 읽는 일을 나눈 이유는, 사진 폴더를
+ * 한 번 정해 두고 계속 쓰기 때문이다(`photoRoot`) — 볼 때마다 다시 고르게 하면
+ * 그 설정이 아무 의미가 없다.
+ *
+ * 규칙은 `pickPhotoFolder`와 같다: 경로 안의 `YYYY-MM-DD` 폴더를 촬영일로 쓰고,
+ * 날짜 폴더 밖의 사진은 건너뛴다.
+ */
+export async function readDatedPhotos(root: RootDirHandle): Promise<{
+  photos: FolderPhoto[];
+  folderName: string;
+  hitLimit: boolean;
+}> {
   const photos: FolderPhoto[] = [];
   let hitLimit = false;
 
@@ -137,7 +156,7 @@ export async function pickPhotoFolder(): Promise<{
     }
   }
 
-  return { root, photos, folderName: root.name, hitLimit };
+  return { photos, folderName: root.name, hitLimit };
 }
 
 /** 폴더를 그냥 훑어볼 때 쓰는 사진 한 장 — 날짜·아이를 요구하지 않는다. */
@@ -175,6 +194,19 @@ export async function browsePhotoFolder(): Promise<{
     throw new FolderCancelledError();
   }
 
+  return readAllPhotos(root);
+}
+
+/**
+ * **이미 고른 폴더**의 사진을 구조를 따지지 않고 전부 읽는다.
+ * `browsePhotoFolder`와 달리 폴더를 묻지 않는다 — 사진 폴더는 한 번 정해 두고
+ * 계속 쓰기 때문이다(`photoRoot`).
+ */
+export async function readAllPhotos(root: RootDirHandle): Promise<{
+  photos: BrowsedPhoto[];
+  folderName: string;
+  hitLimit: boolean;
+}> {
   const photos: BrowsedPhoto[] = [];
   let hitLimit = false;
 
