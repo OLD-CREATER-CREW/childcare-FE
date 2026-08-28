@@ -175,6 +175,13 @@ function mockPlanBlock(label: string): string | null {
   return null;
 }
 
+/** 화면이 쓰는 문서 이름 → 서버가 주는 원문 경로. `citationDocLabel`의 역방향. */
+const SOURCE_BY_DOC: Record<string, string> = {
+  "누리과정 (3~5세)": "reference/nuri_guide(3~5)/nuri_guide_v5.md",
+  "표준보육과정 (0~2세)": "reference/standard_guide(0~2)/standard_guide_v5.md",
+  "어린이집 평가 매뉴얼": "reference/eval_guide/eval_guide_v2.md",
+};
+
 function specDocument(id: number, doc: DocumentDraft): SpecDocument {
   const confirmed = doc.status !== "draft";
   return {
@@ -187,7 +194,16 @@ function specDocument(id: number, doc: DocumentDraft): SpecDocument {
     final: confirmed ? doc.working : null,
     edit_distance: doc.editDistance == null ? null : doc.editDistance / 100,
     source_record_ids: [],
-    citations: [],
+    // 근거(FN-004). 목 문서는 화면 타입으로 들고 있으므로 서버 계약 모양으로
+    // 되돌린다 — 화면이 실서버와 같은 경로로 읽어야 목으로 만든 화면이 맞는다.
+    citations: doc.citations.map((c) => ({
+      source: SOURCE_BY_DOC[c.doc] ?? c.doc,
+      section: c.where.split(" › ")[0] ?? "",
+      subsection: c.where.split(" › ")[1] ?? "",
+      page: c.page,
+      chunk: c.text,
+      slot: c.slot,
+    })),
     // 놀이이야기만 값이 온다. 목에서도 **비어 있는 쪽을 기본**으로 둔다 —
     // 실제 서버도 교사가 사진을 일지에 붙이지 않았으면 빈 배열을 주므로,
     // 화면이 그 상태를 먼저 견디는지 확인되어야 한다.

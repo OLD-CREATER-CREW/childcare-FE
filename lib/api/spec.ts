@@ -220,6 +220,29 @@ export type SpecObservations = {
 };
 
 /** EP-010 / EP-011 문서 */
+/**
+ * 초안을 쓸 때 실제로 검색해 넣은 근거 한 조각(FN-004 · REQ-NF-015).
+ *
+ * 서버가 생성 시점에 `documents.citations`로 **박제**한다 — 나중에 다시
+ * 검색하지 않는다. 같은 문서를 다시 열었을 때 다른 근거가 보이면 "이 글이 무엇에
+ * 기대어 쓰였나"라는 질문에 답할 수 없기 때문이다.
+ */
+export type SpecCitation = {
+  /** 원문 파일 경로. 화면은 여기서 문서 이름을 뽑는다(`citationDocLabel`). */
+  source: string;
+  section?: string;
+  subsection?: string;
+  page?: number | null;
+  /** 실제로 프롬프트에 실린 문단 */
+  chunk: string;
+  chunk_id?: string;
+  /**
+   * 어느 칸을 위해 검색한 근거인가 — 발달평가서는 발달영역, 보육일지는 평가지표.
+   * 슬롯을 나눠 검색하므로(retrieval_plan) 화면도 그 묶음을 그대로 보여 준다.
+   */
+  slot?: string | null;
+};
+
 export type SpecDocument = {
   document_id: number;
   type: SpecDocType;
@@ -245,7 +268,7 @@ export type SpecDocument = {
       { start: number; length: number; text: string; record_ids: number[] }[]
     >;
   } | null;
-  citations?: unknown[];
+  citations?: SpecCitation[];
   /** 놀이이야기(play_story)만 채워진다. 다른 문서는 없거나 빈 배열. */
   photo_suggestions?: SpecPhotoSuggestion[];
   /** 이 문서를 만들 때 쓴 양식 템플릿. 활성 템플릿이 없었으면 null(평문 폴백). */

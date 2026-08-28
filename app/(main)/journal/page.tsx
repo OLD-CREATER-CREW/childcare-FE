@@ -103,6 +103,7 @@ export default function JournalPage() {
                 <ProvenanceReader
                   blocks={cellBlocks(doc)}
                   records={sourceCards}
+                  citations={draftQuery.data?.citations ?? []}
                   hint="점선 밑줄 = 하루 기록에서 나온 구문 · 눌러서 근거를 봅니다"
                 />
               )
