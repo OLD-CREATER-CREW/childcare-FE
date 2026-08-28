@@ -41,6 +41,9 @@ export const queryKeys = {
   settings: ["settings"] as const,
   /** EP-052 — 기관이 쓰던 문서(문체 예시). 문서 종류마다 따로다. */
   styleSamples: (type: DocType) => ["style-samples", type] as const,
+  /** EP-054 — 기간 안에 실제로 한 놀이. 반과 기간이 다르면 다른 목록이다. */
+  monthActivities: (className: string | null, from: string, to: string) =>
+    ["records", "activities", className ?? "all", from, to] as const,
   /** SCR-016 — 재원/퇴소 필터가 다르면 다른 목록이다 */
   childRoster: (status: ChildStatus | "all") =>
     ["children", "roster", status] as const,
@@ -352,6 +355,8 @@ export const useRegenerateDraft = () => {
       topic,
       className,
       date,
+      picks,
+      playCount,
     }: {
       type: DocType;
       childId: string | null;
@@ -361,7 +366,15 @@ export const useRegenerateDraft = () => {
       className?: string | null;
       /** 보육일지에서 교사가 고른 날. 다른 문서는 쓰지 않는다. */
       date?: string | null;
-    }) => apiFn.generateDocumentDraft(type, childId, topic, className, date),
+      /** 놀이이야기에서 교사가 고른 놀이(SCR-018). 비면 AI가 전부 고른다. */
+      picks?: apiFn.PlayPick[];
+      /** 놀이이야기 소주제 개수. 비면 서식이 정한 범위(3~6)를 따른다. */
+      playCount?: number;
+    }) =>
+      apiFn.generateDocumentDraft(type, childId, topic, className, date, {
+        picks,
+        playCount,
+      }),
     onSuccess: (data, { type, childId, date }) => {
       qc.setQueryData(
         queryKeys.documentDraft(type, childId, date ?? null),
@@ -375,6 +388,45 @@ export const useRegenerateDraft = () => {
     },
   });
 };
+
+/**
+ * EP-054 — 기간 안에 실제로 한 놀이.
+ *
+ * 반을 아직 고르지 않았으면 부르지 않는다(`enabled`). 반 없이 부르면 기관 전체
+ * 활동이 오는데, 그것은 이 화면이 물은 것이 아니다.
+ */
+export const useMonthActivities = (
+  className: string | null,
+  periodFrom: string,
+  periodTo: string,
+) =>
+  useQuery({
+    queryKey: queryKeys.monthActivities(className, periodFrom, periodTo),
+    queryFn: () => apiFn.fetchMonthActivities(periodFrom, periodTo, className),
+    enabled: Boolean(className),
+  });
+
+/**
+ * EP-055 — 칸 하나만 다시 만든다.
+ *
+ * 캐시를 건드리지 않는다. 서버가 저장하지 않고 텍스트만 주므로, 반영은 화면이
+ * 자기 블록 상태에 하고 그 결과를 작업본으로 저장한다(EP-013).
+ */
+export const useRegenerateBlock = () =>
+  useMutation({
+    mutationFn: ({
+      documentId,
+      blockLabel,
+      activity,
+      date,
+    }: {
+      documentId: number;
+      blockLabel: string;
+      activity?: string;
+      date?: string;
+    }) =>
+      apiFn.regenerateDocumentBlock(documentId, blockLabel, { activity, date }),
+  });
 
 export const useSaveWorkingCopy = () =>
   useMutation({

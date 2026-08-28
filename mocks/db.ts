@@ -611,12 +611,26 @@ function seedPhotos(): Photo[] {
 }
 
 /**
+ * 목 문서 번호 발급기.
+ *
+ * 실 서버는 DB가 매기지만 목에는 그럴 것이 없다. 값이 겹치지 않기만 하면 되고,
+ * 새로고침하면 처음부터 다시 세도 상관없다(목 상태 자체가 그렇다).
+ */
+let mockDocumentId = 1000;
+function nextMockDocumentId(): number {
+  mockDocumentId += 1;
+  return mockDocumentId;
+}
+
+/**
  * 주간 계획안 초안을 시드로 심는다.
  * planContent()가 state.templates를 읽으므로, 반드시 state가 할당된 뒤에 호출해야 한다
  * (createState 안에서 부르면 `export let state` 초기화 전 접근 → TDZ 오류).
  */
 function seedDocuments() {
   state.documents.set(docKey("plan", null), {
+    // 목 문서에도 번호가 있어야 한다 — 화면이 칸 재생성(EP-055)에 쓴다.
+    documentId: nextMockDocumentId(),
     type: "plan",
     childId: null,
     label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
@@ -1290,6 +1304,59 @@ export function saveRecord(input: DailyRecordInput): DailyRecord {
   return rec;
 }
 
+/**
+ * EP-054 목 — 기간 안에 실제로 한 놀이.
+ *
+ * 서버(`services/activity_index.py`)와 **같은 규칙**으로 센다: 활동 태그를 모아
+ * 며칠 했는지로 정렬한다. 규칙이 갈리면 목에서 되던 것이 실 서버에서 안 된다.
+ */
+export function getMonthActivities(
+  periodFrom: string,
+  periodTo: string,
+): {
+  activity: string;
+  days: number;
+  dates: string[];
+  record_count: number;
+  child_count: number;
+}[] {
+  const stats = new Map<
+    string,
+    { dates: Set<string>; records: number; children: Set<string> }
+  >();
+
+  state.records.forEach((rec) => {
+    if (periodFrom && rec.date < periodFrom) return;
+    if (periodTo && rec.date > periodTo) return;
+    rec.activities.forEach((name) => {
+      const key = name.trim();
+      if (!key) return;
+      const stat = stats.get(key) ?? {
+        dates: new Set<string>(),
+        records: 0,
+        children: new Set<string>(),
+      };
+      stat.dates.add(rec.date);
+      stat.records += 1;
+      stat.children.add(rec.childId);
+      stats.set(key, stat);
+    });
+  });
+
+  return Array.from(stats, ([activity, stat]) => ({
+    activity,
+    days: stat.dates.size,
+    dates: Array.from(stat.dates).sort(),
+    record_count: stat.records,
+    child_count: stat.children.size,
+  })).sort(
+    (a, b) =>
+      b.days - a.days ||
+      b.record_count - a.record_count ||
+      (a.activity < b.activity ? -1 : 1),
+  );
+}
+
 export function getSummary(): RecordSummary {
   const done = state.children.filter((c) => c.recorded).length;
   const pendingDocs = Array.from(state.documents.values()).filter(
@@ -1358,6 +1425,7 @@ export function getDraft(
     label = `${child.name} · 2026 발달평가서`;
   }
   const doc: DocumentDraft = {
+    documentId: nextMockDocumentId(),
     type,
     childId: type === "notice" || type === "evaluation" ? childId : null,
     label,
