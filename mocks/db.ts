@@ -1139,8 +1139,29 @@ export function getChildren(): Child[] {
   return state.children;
 }
 
+/**
+ * 아동 조회. **`c1`과 `c01`을 같은 아이로 본다.**
+ *
+ * 시드는 `c01`처럼 자리를 맞춰 적어 뒀는데, 와이어를 거쳐 돌아오는 id는
+ * `intToChildId(1)` = `c1`이다(실 서버는 정수 id를 쓰고 UI id는 거기서
+ * 만들어진다 — 자리 맞춤이라는 개념이 없다). 그래서 `/api/children/1/...`
+ * 계열 경로가 목에서 전부 404였고, **관찰·발달영역 화면이 목 모드에서 아예
+ * 열리지 않았다.**
+ *
+ * 시드를 전부 `c1`로 고치는 대신 여기서 흡수한다 — 시드 문자열은 사람이 읽는
+ * 자료고, 자리 맞춤이 읽기 좋다.
+ */
 export function getChild(id: string): Child | undefined {
-  return state.children.find((c) => c.id === id);
+  const hit = state.children.find((c) => c.id === id);
+  if (hit) return hit;
+  const n = Number(String(id).replace(/^c/, ""));
+  if (!Number.isFinite(n)) return undefined;
+  return state.children.find((c) => Number(c.id.replace(/^c/, "")) === n);
+}
+
+/** 시드가 쓰는 표기(`c01`)로 맞춘다. 못 찾으면 준 값을 그대로 돌려준다. */
+export function canonicalChildId(id: string): string {
+  return getChild(id)?.id ?? id;
 }
 
 // ---------- 아동 인적사항 (FN-021 / EP-039~042) ----------
@@ -1768,8 +1789,10 @@ export function sendPhotos(ids: number[]): number {
 // ---------- 관찰 ----------
 
 export function getObservations(childId: string): ObservationData {
+  // 와이어에서 온 id는 자리 맞춤이 없다(`c1`) — 시드 표기(`c01`)로 맞춘다.
+  const key = canonicalChildId(childId);
   const timeline = state.observations
-    .filter((o) => o.childId === childId)
+    .filter((o) => o.childId === key)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
   return {
     domains: DEV_DOMAINS.map((name) => ({
