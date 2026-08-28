@@ -55,47 +55,64 @@ const BUDGET: Record<string, number> = {
   "주차별 놀이": 135,
 };
 
+/**
+ * 칸 이름 앞에 붙는 장식을 떼어 낸다.
+ *
+ * 모델이 칸 이름을 그대로 쓸 때도 있고 `■ 주제`처럼 머리표를 달 때도 있다 —
+ * 같은 프롬프트에서도 실행마다 갈린다(실측: 주간 계획안은 `■`가 붙었고 월간은
+ * 붙지 않았다). 정확히 일치로만 찾으면 그날 운에 따라 화면이 통째로 폴백된다.
+ *
+ * 붙었던 장식은 `sectionRaw`로 기억해 두었다가 저장할 때 그대로 되돌린다 —
+ * 화면이 글의 모양을 바꾸면 원본 대비 편집거리가 부풀어 지표가 거짓이 된다.
+ */
+const DECORATION = /^[\s■□◆◇▶▷●○◎※▪•*#>\-–—]+/;
+
+function bareLabel(line: string): string {
+  return line.replace(DECORATION, "").trim();
+}
+
 /** `1주 < 물을 만나요 >` — 주차 번호와 소주제를 뜯는다. */
 const WEEK_HEAD = /^(\d{1,2})\s*주\s*<\s*(.*?)\s*>\s*$/;
 
+/** 모든 블록이 함께 지니는 것 — 어느 칸에서 나왔나. */
+type BlockBase = {
+  key: string;
+  /** 장식을 뗀 칸 이름. EP-055의 `block_label`이 이 값을 쓴다. */
+  section: string;
+  /** 초안에 실제로 쓰여 있던 머리말(`■ 주제`). 저장할 때 그대로 되돌린다. */
+  sectionRaw: string;
+  label: string;
+};
+
 export type PlanBlock =
   /** 한 줄짜리 칸 — 주제·기간. 값만 고친다. */
-  | { kind: "line"; key: string; section: string; label: string; text: string }
+  | (BlockBase & { kind: "line"; text: string })
   /** 여러 문장이 든 칸 — 발달영역 연계. 통째로 고친다. */
-  | { kind: "text"; key: string; section: string; label: string; text: string }
+  | (BlockBase & { kind: "text"; text: string })
   /** `⋅` 항목이 늘어선 칸 — 교사의 기대·주간 놀이. 줄 단위로 고친다. */
-  | {
+  | (BlockBase & {
       kind: "list";
-      key: string;
-      section: string;
-      label: string;
       /** 항목을 부르는 이름 — 「+ 놀이 추가」의 그 말 */
       noun: string;
       items: string[];
       /** 원래 글에서 항목이 줄마다 있었나 — 직렬화가 그 모양을 지킨다 */
       perLine: boolean;
-    }
+    })
   /** 주차 하나 — 소주제 + 놀이 줄들. */
-  | {
+  | (BlockBase & {
       kind: "week";
-      key: string;
-      section: string;
-      label: string;
       no: number;
       subtopic: string;
       items: string[];
       perLine: boolean;
-    }
+    })
   /** 일과 하나 — 일과 이름 + 계획 줄들. */
-  | {
+  | (BlockBase & {
       kind: "routine";
-      key: string;
-      section: string;
-      label: string;
       name: string;
       items: string[];
       perLine: boolean;
-    };
+    });
 
 export type PlanParseResult =
   { ok: true; blocks: PlanBlock[] } | { ok: false; reason: string };
@@ -174,20 +191,25 @@ export function parse(draft: string, type: DocType): PlanParseResult {
 
   /** 지금 읽고 있는 칸과 그 본문 줄들. */
   let section: string | null = null;
+  let sectionRaw = "";
   let body: string[] = [];
 
   const flush = () => {
     if (section === null) return;
-    blocks.push(...toBlocks(section, body));
+    blocks.push(...toBlocks(section, sectionRaw, body));
     section = null;
+    sectionRaw = "";
     body = [];
   };
 
   for (const raw of lines) {
     const t = raw.trim();
-    if (names.includes(t)) {
+    // 장식을 떼고 견준다 — 모델이 `■ 주제`처럼 머리표를 달 때가 있다.
+    const bare = bareLabel(t);
+    if (names.includes(bare)) {
       flush();
-      section = t;
+      section = bare;
+      sectionRaw = t;
       continue;
     }
     if (section !== null) body.push(raw);
@@ -200,7 +222,11 @@ export function parse(draft: string, type: DocType): PlanParseResult {
 }
 
 /** 한 칸의 본문을 그 칸에 맞는 블록들로. 주차·일과는 여럿으로 갈라진다. */
-function toBlocks(section: string, body: string[]): PlanBlock[] {
+function toBlocks(
+  section: string,
+  sectionRaw: string,
+  body: string[],
+): PlanBlock[] {
   const joined = body.join("\n").trim();
 
   // 주차별 놀이 — `N주 < 소주제 >` 마다 하나씩
@@ -216,6 +242,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         kind: "week",
         key: `${section}-${head[1]}`,
         section,
+        sectionRaw,
         label: `${section} · ${head[1]}주`,
         no: Number(head[1]),
         subtopic: head[2],
@@ -255,6 +282,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         kind: "routine",
         key: `${section}-${name}`,
         section,
+        sectionRaw,
         // 시각까지 넣으면 카드 제목이 길어 문장을 밀어낸다. 시각은 부제로 간다.
         label: `${section} · ${name.split(" (")[0]}`,
         name,
@@ -289,6 +317,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         kind: "list",
         key: section,
         section,
+        sectionRaw,
         label: section,
         noun: section === "교사의 기대" ? "기대" : "놀이",
         items: splitItems(joined),
@@ -303,6 +332,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
       kind: single ? "line" : "text",
       key: section,
       section,
+      sectionRaw,
       label: section,
       text: joined,
     },
@@ -322,7 +352,9 @@ export function serialize(blocks: PlanBlock[]): string {
   for (const block of blocks) {
     const parts: string[] = [];
     if (block.section !== lastSection) {
-      parts.push(block.section);
+      // 초안에 쓰여 있던 머리말 그대로. 화면이 `■`를 떼어 저장하면 원본 대비
+      // 편집거리가 부풀어 채택률·수정률 지표가 거짓이 된다.
+      parts.push(block.sectionRaw || block.section);
       lastSection = block.section;
     }
 
