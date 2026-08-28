@@ -72,6 +72,8 @@ export type PlanBlock =
       /** 항목을 부르는 이름 — 「+ 놀이 추가」의 그 말 */
       noun: string;
       items: string[];
+      /** 원래 글에서 항목이 줄마다 있었나 — 직렬화가 그 모양을 지킨다 */
+      perLine: boolean;
     }
   /** 주차 하나 — 소주제 + 놀이 줄들. */
   | {
@@ -82,6 +84,7 @@ export type PlanBlock =
       no: number;
       subtopic: string;
       items: string[];
+      perLine: boolean;
     }
   /** 일과 하나 — 일과 이름 + 계획 줄들. */
   | {
@@ -91,11 +94,11 @@ export type PlanBlock =
       label: string;
       name: string;
       items: string[];
+      perLine: boolean;
     };
 
 export type PlanParseResult =
-  | { ok: true; blocks: PlanBlock[] }
-  | { ok: false; reason: string };
+  { ok: true; blocks: PlanBlock[] } | { ok: false; reason: string };
 
 /** 이 문서 종류가 블록으로 나뉘는가. 계획안 둘만 해당한다. */
 export function isPlanType(type: DocType): type is "plan" | "plan_monthly" {
@@ -132,13 +135,25 @@ function splitItems(body: string): string[] {
     .filter(Boolean);
 }
 
-/** 항목 배열을 한 줄로 합친다 — 서식이 그 모양을 쓴다. */
-function joinItems(items: string[]): string {
-  return items
+/**
+ * 항목 배열을 다시 글로. **원래 모양을 지킨다.**
+ *
+ * 서식 견본은 한 줄에 `⋅가 ⋅나 ⋅다`로 잇지만, 실제 모델(solar-pro4)은 줄마다
+ * 하나씩 쓴다(2026-08-28 실측). 어느 쪽이든 파싱은 되지만 **저장할 때 모양을
+ * 바꾸면** 교사가 놀이 하나만 고쳐도 문서 전체가 한 줄로 접히고, 원본 초안과의
+ * 편집거리(채택률·수정률 지표)가 통째로 부풀어 오른다.
+ */
+function joinItems(items: string[], perLine: boolean): string {
+  const kept = items
     .map((t) => t.trim())
     .filter(Boolean)
-    .map((t) => BULLET + t)
-    .join(" ");
+    .map((t) => BULLET + t);
+  return kept.join(perLine ? "\n" : " ");
+}
+
+/** 항목이 줄마다 있었나 — 머리표로 시작하는 줄이 둘 이상이면 그렇다. */
+function isPerLine(body: string[]): boolean {
+  return body.filter((l) => l.trim().startsWith(BULLET)).length > 1;
 }
 
 /**
@@ -193,6 +208,8 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
     const out: PlanBlock[] = [];
     let head: RegExpExecArray | null = null;
     let items: string[] = [];
+    /** 이 주의 놀이가 몇 줄에 걸쳐 있었나 */
+    let lineCount = 0;
     const push = () => {
       if (!head) return;
       out.push({
@@ -203,9 +220,11 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         no: Number(head[1]),
         subtopic: head[2],
         items,
+        perLine: lineCount > 1,
       });
       head = null;
       items = [];
+      lineCount = 0;
     };
     for (const raw of body) {
       const t = raw.trim();
@@ -215,7 +234,10 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         head = m;
         continue;
       }
-      if (head && t) items.push(...splitItems(t));
+      if (head && t) {
+        items.push(...splitItems(t));
+        lineCount += 1;
+      }
     }
     push();
     if (out.length > 0) return out;
@@ -226,6 +248,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
     const out: PlanBlock[] = [];
     let name: string | null = null;
     let items: string[] = [];
+    let lineCount = 0;
     const push = () => {
       if (name === null) return;
       out.push({
@@ -236,15 +259,20 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         label: `${section} · ${name.split(" (")[0]}`,
         name,
         items,
+        perLine: lineCount > 1,
       });
       name = null;
       items = [];
+      lineCount = 0;
     };
     for (const raw of body) {
       const t = raw.trim();
       if (!t) continue;
       if (t.startsWith(BULLET)) {
-        if (name !== null) items.push(...splitItems(t));
+        if (name !== null) {
+          items.push(...splitItems(t));
+          lineCount += 1;
+        }
         continue;
       }
       push();
@@ -264,6 +292,7 @@ function toBlocks(section: string, body: string[]): PlanBlock[] {
         label: section,
         noun: section === "교사의 기대" ? "기대" : "놀이",
         items: splitItems(joined),
+        perLine: isPerLine(body),
       },
     ];
   }
@@ -300,13 +329,13 @@ export function serialize(blocks: PlanBlock[]): string {
     if (block.kind === "line" || block.kind === "text") {
       parts.push(block.text);
     } else if (block.kind === "list") {
-      parts.push(joinItems(block.items));
+      parts.push(joinItems(block.items, block.perLine));
     } else if (block.kind === "week") {
       parts.push(`${block.no}주 < ${block.subtopic} >`);
-      parts.push(joinItems(block.items));
+      parts.push(joinItems(block.items, block.perLine));
     } else {
       parts.push(block.name);
-      parts.push(joinItems(block.items));
+      parts.push(joinItems(block.items, block.perLine));
     }
     out.push(parts.filter((p) => p !== "").join("\n"));
   }
@@ -343,9 +372,7 @@ export function applyRegenerated(block: PlanBlock, text: string): PlanBlock {
 
   if (block.kind === "week") {
     const m = WEEK_HEAD.exec(lines[0]?.trim() ?? "");
-    const items = splitItems(
-      (m ? lines.slice(1).join("\n") : rest).trim(),
-    );
+    const items = splitItems((m ? lines.slice(1).join("\n") : rest).trim());
     return {
       ...block,
       subtopic: m ? m[2] : block.subtopic,
