@@ -70,7 +70,9 @@ function RecordForm() {
 
   const kids = useMemo(() => childrenQuery.data ?? [], [childrenQuery.data]);
   const [childId, setChildId] = useState(params.get("child") ?? "");
-  const [date, setDate] = useState(TODAY);
+  // 지난 날짜의 기록으로 바로 오는 링크가 있다(보육일지 출처 카드) — 날짜가
+  // 오늘로 고정되면 그 링크가 엉뚱한 날의 빈 폼을 연다.
+  const [date, setDate] = useState(params.get("date") ?? TODAY);
   const recordQuery = useDailyRecord(childId, date);
   const recordedQuery = useDayRecordedIds(date);
 

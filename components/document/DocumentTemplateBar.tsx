@@ -70,6 +70,15 @@ export function DocumentTemplateBar({
   const doc = draftQuery.data ?? null;
   const hasFile = doc?.fileKey != null && doc.fileRenderStatus === "ok";
   const isPreviewFile = doc?.fileKey?.includes("_preview") ?? false;
+  /*
+    확정 뒤에는 이 줄에서 파일을 주지 않는다.
+
+    보육일지에 검토 단계가 생기면서 확정본 파일은 아래 「완성 문서 파일」이
+    맡게 됐다(EP-038/036). 여기 초안 파일 버튼을 그대로 두면 화면에 내려받기가
+    둘이 되고, **위쪽이 확정 전 초안**이라 교사가 옛 파일을 제출할 수 있다.
+    확정 전에는 그대로 둔다 — 한글에서 열어 봐야 칸이 넘치는지 검토된다.
+  */
+  const offerDraftFile = hasFile && doc?.status === "draft";
   const fileKind = fileKindLabel(activeDetail.data?.structure?.sourceFormat);
   const structure = activeDetail.data?.structure ?? null;
 
@@ -158,7 +167,7 @@ export function DocumentTemplateBar({
         </button>
 
         {/* 한글 파일 — 확정 전이라도 받는다. 한글에서 열어 봐야 검토가 된다. */}
-        {hasFile && (
+        {offerDraftFile && (
           <button
             className="btn primary"
             onClick={download}
@@ -188,7 +197,12 @@ export function DocumentTemplateBar({
                 · 표 {structure.tables.length}개 · 칸 {structure.cells.length}개
               </>
             )}
-            {isPreviewFile && " · 지금 받는 파일은 확정 전 초안입니다"}
+            {offerDraftFile &&
+              isPreviewFile &&
+              " · 지금 받는 파일은 확정 전 초안입니다"}
+            {doc?.status !== "draft" &&
+              doc != null &&
+              " · 확정본은 아래 「완성 문서 파일」에서 받습니다"}
           </span>
         ) : (
           "등록된 서식이 없습니다 — 올리지 않아도 문서는 글로 만들어지지만, 우리 원 양식 그대로 받으려면 한 개 올려 주세요."

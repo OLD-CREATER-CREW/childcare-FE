@@ -25,8 +25,10 @@ import type {
   UserAccount,
   UserAccountInput,
   UserAccountPatch,
+  ProvenanceSpan,
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
+import { recordIdToInt } from "@/lib/api/spec";
 import { applyTemplate } from "@/lib/templates";
 import { analyzeHwpx, fillHwpx, type HwpxAnalysis } from "@/lib/hwpx";
 import { JOURNAL_SAMPLE_CELL_TEXT } from "@/mocks/journal-sample";
@@ -483,6 +485,98 @@ function playStoryContent(): string {
   ].join("\n");
 }
 
+/**
+ * 목 출처 표시(FN-022) — 초안의 어느 구문이 어느 관찰에서 나왔는지.
+ *
+ * 실 서버는 모델이 붙인 태그를 떼어 위치를 계산한다. 목에서는 그 결과 모양만
+ * 흉내 낸다 — 초안 문구를 **본문에서 실제로 찾아** 위치를 잡으므로, 화면이
+ * 밑줄을 엉뚱한 곳에 그리면 그것은 화면의 잘못이다(목이 거짓 좌표를 주는 것이
+ * 아니다).
+ *
+ * 짝지을 관찰이 없으면 빈 배열을 준다 — "추적했으나 표시 없음"이고, 화면이 그
+ * 상태를 견디는지도 확인되어야 한다.
+ */
+/**
+ * 보육일지의 칸별 출처(FN-022) — 그날 기록의 **활동 이름**을 칸 문안에서 찾는다.
+ *
+ * 목이 지어낸 연결이 아니다. 일지 문안은 그날 기록의 활동 이름을 그대로 실어
+ * 만들어지므로(`journalContent`), 그 이름이 나타난 자리가 곧 그 기록에서 나온
+ * 자리다. 실서버는 모델이 붙인 태그를 서버가 떼어 내며 같은 값을 만든다.
+ *
+ * 기록 id는 목 규약을 따른다 — 목의 하루 기록은 아이 하나에 하루 하나라
+ * `record_id`가 아이 id다(`handlers.specRecord`).
+ */
+function journalCellProvenance(
+  doc: DocumentDraft,
+  date: string,
+): Record<string, ProvenanceSpan[]> {
+  const out: Record<string, ProvenanceSpan[]> = {};
+  const recs = recordsOn(date);
+  if (recs.length === 0) return out;
+
+  // 활동 이름 → 그 활동을 한 아이들의 기록 id. 긴 이름부터 찾아 겹침을 줄인다.
+  const byActivity = new Map<string, number[]>();
+  recs.forEach((r) =>
+    r.activities.forEach((a) => {
+      const ids = byActivity.get(a) ?? [];
+      ids.push(recordIdToInt(r.childId));
+      byActivity.set(a, ids);
+    }),
+  );
+  const names = Array.from(byActivity.keys()).sort((a, b) => b.length - a.length);
+
+  doc.cells.forEach((cell) => {
+    if (cell.source === "template" || !cell.text.trim()) return;
+    const spans: ProvenanceSpan[] = [];
+    const taken: [number, number][] = [];
+    names.forEach((name) => {
+      const at = cell.text.indexOf(name);
+      if (at < 0) return;
+      // 이미 밑줄이 그어진 자리와 겹치면 버린다 — 화면도 같은 규칙으로 거른다.
+      if (taken.some(([s, e]) => at < e && at + name.length > s)) return;
+      taken.push([at, at + name.length]);
+      spans.push({
+        start: at,
+        length: name.length,
+        text: name,
+        recordIds: byActivity.get(name) ?? [],
+      });
+    });
+    if (spans.length > 0) out[cell.key] = spans.sort((a, b) => a.start - b.start);
+  });
+  return out;
+}
+
+function evaluationProvenance(
+  child: Child,
+  content: string,
+): ProvenanceSpan[] {
+  const obs = state.observations.filter((o) => o.childId === child.id);
+  if (obs.length === 0) return [];
+
+  // 문구 → 그 문구의 근거가 될 관찰. 실제 초안 문장에서 고른다.
+  const pairs: [string, ObservationEntry[]][] = [
+    ["계단 오르내리기·달리기에서 안정적인 신체 조절을 보임", obs.filter((o) => o.tag === "신체운동")],
+    ["자신의 요구를 말로 전달하는 빈도가 증가함", obs.filter((o) => o.tag === "의사소통")],
+    ["갈등 상황에서 화해를 시도하는 등 또래 관계 조절 능력이 향상됨", obs.filter((o) => o.tag === "사회관계")],
+  ];
+
+  const spans: ProvenanceSpan[] = [];
+  for (const [phrase, sources] of pairs) {
+    if (sources.length === 0) continue;
+    const at = content.indexOf(phrase);
+    if (at < 0) continue; // 서식이 바뀌어 문구가 없으면 조용히 건너뛴다
+    spans.push({
+      start: at,
+      length: phrase.length,
+      text: phrase,
+      recordIds: sources.slice(0, 2).map((o) => recordIdToInt(o.id)),
+    });
+  }
+  return spans;
+}
+
+
 function evaluationContent(child: Child): string {
   const obs = state.observations.filter((o) => o.childId === child.id);
   const byDomain = DEV_DOMAINS.map(
@@ -631,6 +725,9 @@ function seedDocuments() {
   state.documents.set(docKey("plan", null), {
     // 목 문서에도 번호가 있어야 한다 — 화면이 칸 재생성(EP-055)에 쓴다.
     documentId: nextMockDocumentId(),
+    // 계획안은 출처를 추적하지 않는다(발달평가서·보육일지만 켜져 있다).
+    provenance: null,
+    cellProvenance: {},
     type: "plan",
     childId: null,
     label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
@@ -1447,6 +1544,13 @@ export function getDraft(
   }
   const doc: DocumentDraft = {
     documentId: nextMockDocumentId(),
+    // 발달평가서·보육일지가 출처를 추적한다 — 나머지는 null("추적 안 함").
+    // 보육일지는 칸 단위 문서라 본문 표시가 아니라 칸별 표시를 낸다(아래).
+    provenance:
+      type === "evaluation" && childId
+        ? evaluationProvenance(getChild(childId)!, content)
+        : null,
+    cellProvenance: {},
     type,
     childId: type === "notice" || type === "evaluation" ? childId : null,
     label,
@@ -1471,6 +1575,7 @@ export function getDraft(
     if (template?.structure) {
       doc.templateId = template.id;
       doc.cells = buildDocumentCells(template, content);
+      if (type === "journal") doc.cellProvenance = journalCellProvenance(doc, day);
       /*
         생성과 동시에 **초안 파일**을 만들어 둔다.
 

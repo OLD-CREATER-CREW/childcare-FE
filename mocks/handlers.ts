@@ -34,6 +34,7 @@ import type {
   DocumentDraft,
   FormTemplate,
   Photo,
+  ProvenanceSpan,
   TemplateDocType,
   UserAccount,
   UserRole,
@@ -128,10 +129,34 @@ function specDocument(id: number, doc: DocumentDraft): SpecDocument {
     cells: doc.cells.map(specDocumentCell),
     file_key: doc.fileKey,
     file_render_status: doc.fileRenderStatus,
+    // FN-022 — 본문에는 표시가 없고 위치만 온다. null이면 추적 안 하는 타입.
+    provenance:
+      doc.provenance == null && Object.keys(doc.cellProvenance).length === 0
+        ? null
+        : {
+            draft: (doc.provenance ?? []).map(specSpan),
+            // 칸별 표시 — 보육일지처럼 칸 단위 문서가 여기에 온다.
+            cells: Object.fromEntries(
+              Object.entries(doc.cellProvenance).map(([key, spans]) => [
+                key,
+                spans.map(specSpan),
+              ]),
+            ),
+          },
     created_at: doc.generatedAt,
     confirmed_at: confirmed ? doc.generatedAt : null,
     sent_at: doc.status === "sent" ? doc.generatedAt : null,
     label: doc.label,
+  };
+}
+
+/** 출처 span 하나 — 본문용과 칸용이 같은 모양이다. */
+function specSpan(sp: ProvenanceSpan) {
+  return {
+    start: sp.start,
+    length: sp.length,
+    text: sp.text,
+    record_ids: sp.recordIds,
   };
 }
 
@@ -762,51 +787,6 @@ export const handlers = [
 
     // 단일 생성 — 보육일지는 `date`가 문서를 가른다(EP-010).
     const childId = body.child_id ? intToChildId(body.child_id) : null;
-
-    /*
-      보육일지만 응답이 JSON이 아니라 **완성 한글 파일**이다. 이 문서에는 화면
-      안의 검토 단계가 없어 생성·확정·렌더링·내려받기가 한 번에 끝난다.
-      `document_id`는 바디에 실을 수 없어 `X-Document-Id` 헤더로 내려 준다.
-
-      서식이 없으면 **초안을 만들기 전에** 막는다 — 실서버도 그렇게 한다(어차피
-      내줄 파일이 없는 요청에 모델을 부르지 않는다).
-    */
-    if (uiType === "journal") {
-      if (!db.activeTemplateFor("journal")?.structure)
-        return err(
-          409,
-          "NO_ACTIVE_TEMPLATE",
-          "이 문서 종류에 등록된 양식이 없습니다. 양식을 올리고 활성화한 뒤 다시 시도해 주세요.",
-        );
-
-      const journal = db.getDraft("journal", null, true, body.date);
-      if (!journal)
-        return err(404, "RECORD_NOT_FOUND", "먼저 하루 기록을 남겨 주세요.");
-
-      const journalId = db.assignDocId("journal", null, body.date);
-      // 검토 단계가 없으므로 만들어지는 순간 확정본이다 — 그래야 파일명에
-      // `초안` 표시가 붙지 않고, 렌더링(확정 후에만 된다)도 통과한다.
-      db.confirmDoc("journal", null, journal.working, body.date);
-      const rendered = db.renderDocumentFile("journal", null, body.date);
-      if (!rendered.ok)
-        return err(
-          422,
-          "RENDER_FAILED",
-          "완성 문서를 만들지 못했습니다. 양식의 표 구조를 확인해 주세요.",
-        );
-
-      const bytes = await db.documentFileBytes("journal", null, body.date);
-      const ext = rendered.fileKey.endsWith(".hwpx") ? "hwpx" : "docx";
-      const filename = `journal_${body.date ?? db.TODAY}.${ext}`;
-      return new HttpResponse(bytes ?? journal.working, {
-        status: 201,
-        headers: {
-          "Content-Type": MEDIA_TYPE[ext],
-          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
-          "X-Document-Id": String(journalId),
-        },
-      });
-    }
 
     const draft = db.getDraft(uiType, childId, true, body.date);
     if (!draft)

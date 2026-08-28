@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { useChildren, useObservations } from "@/lib/queries";
+import { useChildren, useDocumentDraft, useObservations } from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
+import { ProvenanceReader } from "@/components/document/ProvenanceReader";
+import type { SourceRecordCard } from "@/components/document/ProvenanceReader";
+import { recordIdToInt } from "@/lib/api/spec";
 import {
   Avatar,
   Notice,
@@ -21,6 +24,8 @@ export default function EvaluationsPage() {
   const [picked, setPicked] = useState<string | null>(null);
   const childId = picked ?? kids[0]?.id ?? "";
   const obsQuery = useObservations(childId);
+  // 출처 표시는 문서에 딸려 온다. 워크벤치도 같은 훅을 쓰므로 같은 캐시를 본다.
+  const draftQuery = useDocumentDraft("evaluation", childId);
 
   const child = kids.find((c) => c.id === childId);
   const totalObs =
@@ -51,6 +56,32 @@ export default function EvaluationsPage() {
         key={childId}
         type="evaluation"
         childId={childId}
+        /*
+          출처 보기(FN-022) — 초안의 어느 구문이 어느 관찰에서 나왔는지.
+          `provenance`가 null이면(추적 안 하는 타입·구버전 서버) 토글이 붙지
+          않아 화면이 지금과 똑같다.
+        */
+        provenanceView={
+          draftQuery.data?.provenance
+            ? (working) => (
+                <ProvenanceReader
+                  /* 발달평가서는 본문 한 덩어리다 — 이름 없는 블록 하나. */
+                  blocks={[
+                    {
+                      key: "body",
+                      text: working,
+                      spans: draftQuery.data?.provenance ?? [],
+                    },
+                  ]}
+                  records={observationCards(
+                    obsQuery.data?.timeline ?? [],
+                    childId,
+                  )}
+                  hint="점선 밑줄 = 관찰에서 나온 구문 · 눌러서 근거를 봅니다"
+                />
+              )
+            : undefined
+        }
         source={
           <>
             {child && (
@@ -153,4 +184,30 @@ function DomainFold({
       )}
     </div>
   );
+}
+
+/**
+ * 관찰 타임라인을 출처 카드로 옮긴다 — 기록 id가 열쇠다.
+ *
+ * 관찰 타임라인의 항목 id가 곧 기록 id이므로, 서버가 준 `record_ids`로 바로
+ * 찾을 수 있다. 못 찾은 id는 감추지 않는다(`ProvenanceReader`가 밝힌다) —
+ * 오래된 관찰이 목록 상한에서 잘려 나간 경우가 있다.
+ */
+function observationCards(
+  timeline: ObservationEntry[],
+  childId: string,
+): Map<number, SourceRecordCard> {
+  const map = new Map<number, SourceRecordCard>();
+  timeline.forEach((entry) => {
+    const id = recordIdToInt(entry.id);
+    if (Number.isNaN(id)) return;
+    map.set(id, {
+      lead: entry.date.slice(5),
+      tags: entry.tags,
+      body: entry.memo,
+      href: `/observations?child=${childId}`,
+      hrefLabel: "관찰·발달영역으로 가기",
+    });
+  });
+  return map;
 }
