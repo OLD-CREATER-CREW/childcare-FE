@@ -430,6 +430,20 @@ function journalContent(date: string): string {
   ].join("\n");
 }
 
+/** 줄바꿈 — 목 문안을 배열로 짜 맞출 때 쓴다. */
+const NL = "\n";
+
+/*
+  계획안 목 문안 — **서식 프로필의 칸 이름을 그대로 쓴다.**
+
+  화면이 초안을 칸별 블록으로 쪼개 그리므로(SCR-007), 목이 제 나름의 모양을 내면
+  목으로 만든 화면이 실서버에서 어긋난다. 칸 이름과 머리표(⋅)는 백엔드의
+  `data/form_profiles/{weekly,monthly}_plan.json`이 정한 것이고, 대역 문안도 같은
+  모양을 낸다(`document_types._mock_weekly_plan`).
+
+  머리표가 중요하다 — 놀이가 한 줄에 `⋅`로 이어져 있어서 그 표시가 곧 화면이
+  놀이를 줄로 나누는 경계다.
+*/
 function planContent(): string {
   const tpl = state.templates.plan;
   if (tpl) {
@@ -440,15 +454,115 @@ function planContent(): string {
       생활주제: "여름과 물놀이",
     });
   }
+  const routine = (name: string, ...items: string[]) =>
+    [name, items.map((t) => "⋅" + t).join(" ")].join(NL);
+
   return [
-    "[생활주제] 여름과 물놀이",
-    "[목표] 물의 성질을 오감으로 탐색하고, 여름철 건강·안전 습관을 기른다.",
-    "[월] 물놀이 준비 · 안전 약속 정하기",
-    "[화] 물감 번지기 — 색의 섞임 관찰",
-    "[수] 물놀이터 체험 (우천 시 실내 감각놀이)",
-    "[목] 젖은 모래 조형 놀이",
-    "[금] 여름 동화 「수박 수영장」 · 한 주 되돌아보기",
-  ].join("\n");
+    ["주제", "여름과 물놀이"].join(NL),
+    ["기간", "2026년 7월 13일 (월) ~ 7월 19일 (금)"].join(NL),
+    [
+      "일과별 계획",
+      routine(
+        "등원 및 통합보육 (7:30 ~ 9:30)",
+        "반갑게 인사하며 등원을 맞이한다.",
+        "교사는 영아의 건강 상태를 개별적으로 살핀다.",
+      ),
+      routine(
+        "오전간식 (9:30 ~ 9:50)",
+        "손을 씻고 자리에 앉아 간식을 먹는다. ❚환기",
+        "다 먹은 영아는 실내놀이를 한다.",
+      ),
+      routine(
+        "실내놀이 (09:50 ~ 11:00 / 15:20 ~ 16:30)",
+        "관심을 보이는 놀이를 스스로 골라 놀이한다.",
+        "교사는 놀이가 이어지도록 필요한 자료를 더해 준다.",
+      ),
+      routine(
+        "바깥놀이·실내대체놀이 (11:00 ~ 11:40)",
+        "물놀이터에서 물을 만지며 놀이한다.",
+        "우천 시 실내에서 감각놀이로 대체한다.",
+      ),
+      routine(
+        "점심식사 (11:40 ~ 13:00)",
+        "손을 씻은 후 자리에 앉아 식사한다. ❚건강교육",
+        "식단을 소개하며 골고루 먹도록 상호작용한다. ❚영양교육",
+      ),
+      routine(
+        "낮잠 및 휴식 (13:00 ~ 15:00)",
+        "개별 침구에서 편안하게 휴식한다.",
+        "낮잠을 자지 않는 영아는 조용한 영역에서 놀이한다.",
+      ),
+      routine(
+        "오후간식 (15:00 ~ 15:20)",
+        "손을 씻고 자리에 앉아 간식을 먹는다. ❚환기",
+      ),
+      routine(
+        "통합보육 및 귀가지도 (16:30 ~ 19:30)",
+        "귀가 준비를 하고 안정된 분위기에서 놀이한다.",
+      ),
+    ].join(NL),
+    [
+      "주간 놀이",
+      [
+        "물감을 물에 풀어 색이 번지는 걸 봐요",
+        "스펀지로 물을 빨아들여 짜 봐요",
+        "얼음을 만져보고 녹는 걸 지켜봐요",
+        "물총으로 과녁을 맞혀요",
+        "젖은 모래로 두꺼비집을 지어요",
+      ]
+        .map((t) => "⋅" + t)
+        .join(" "),
+    ].join(NL),
+    [
+      "발달영역 연계",
+      "자연탐구 – 탐구과정 즐기기: 영아들은 물과 얼음을 만지며 상태가 달라지는 것을 " +
+        "지켜보고, 무엇이 뜨고 가라앉는지 스스로 시험해 보는 경험을 함.",
+    ].join(NL),
+  ].join(NL + NL);
+}
+
+/** 월간 계획안 목 문안. 주간과 같은 이유로 서식 프로필의 칸 이름을 따른다. */
+function monthlyPlanContent(): string {
+  const week = (n: number, subtopic: string, plays: string[]) =>
+    [`${n}주 < ${subtopic} >`, plays.map((t) => "⋅" + t).join(" ")].join(NL);
+
+  return [
+    ["놀이 주제", "여름이 좋아요"].join(NL),
+    ["놀이 기간", "2026년 7월 1일 ~ 7월 31일"].join(NL),
+    [
+      "교사의 기대",
+      "⋅물의 시원한 느낌을 온몸으로 경험한다.",
+      "⋅친구와 함께 물놀이를 하며 즐거움을 나눈다.",
+      "⋅여름철 건강하게 지내는 방법에 관심을 가진다.",
+    ].join(NL),
+    [
+      "주차별 놀이",
+      week(1, "물을 만나요", [
+        "손으로 물을 첨벙첨벙 쳐 봐요",
+        "컵에 물을 담았다 부어요",
+        "물에 뜨는 것을 찾아봐요",
+        "물뿌리개로 화분에 물을 줘요",
+      ]),
+      week(2, "시원해요", [
+        "얼음을 만져보고 녹는 걸 지켜봐요",
+        "얼음을 색깔 물에 넣어 봐요",
+        "부채로 바람을 만들어요",
+        "그늘에 앉아 시원한 바람을 느껴요",
+      ]),
+      week(3, "물놀이해요", [
+        "물총으로 과녁을 맞혀요",
+        "스펀지로 물을 빨아들여 짜 봐요",
+        "물 위에 배를 띄워요",
+        "친구와 물을 주고받아요",
+      ]),
+      week(4, "여름을 그려요", [
+        "물감을 물에 풀어 색이 번지는 걸 봐요",
+        "젖은 모래로 두꺼비집을 지어요",
+        "여름 그림책을 함께 봐요",
+        "여름 노래에 맞춰 몸을 흔들어요",
+      ]),
+    ].join(NL),
+  ].join(NL + NL);
 }
 
 /**
@@ -523,7 +637,9 @@ function journalCellProvenance(
       byActivity.set(a, ids);
     }),
   );
-  const names = Array.from(byActivity.keys()).sort((a, b) => b.length - a.length);
+  const names = Array.from(byActivity.keys()).sort(
+    (a, b) => b.length - a.length,
+  );
 
   doc.cells.forEach((cell) => {
     if (cell.source === "template" || !cell.text.trim()) return;
@@ -542,23 +658,30 @@ function journalCellProvenance(
         recordIds: byActivity.get(name) ?? [],
       });
     });
-    if (spans.length > 0) out[cell.key] = spans.sort((a, b) => a.start - b.start);
+    if (spans.length > 0)
+      out[cell.key] = spans.sort((a, b) => a.start - b.start);
   });
   return out;
 }
 
-function evaluationProvenance(
-  child: Child,
-  content: string,
-): ProvenanceSpan[] {
+function evaluationProvenance(child: Child, content: string): ProvenanceSpan[] {
   const obs = state.observations.filter((o) => o.childId === child.id);
   if (obs.length === 0) return [];
 
   // 문구 → 그 문구의 근거가 될 관찰. 실제 초안 문장에서 고른다.
   const pairs: [string, ObservationEntry[]][] = [
-    ["계단 오르내리기·달리기에서 안정적인 신체 조절을 보임", obs.filter((o) => o.tag === "신체운동")],
-    ["자신의 요구를 말로 전달하는 빈도가 증가함", obs.filter((o) => o.tag === "의사소통")],
-    ["갈등 상황에서 화해를 시도하는 등 또래 관계 조절 능력이 향상됨", obs.filter((o) => o.tag === "사회관계")],
+    [
+      "계단 오르내리기·달리기에서 안정적인 신체 조절을 보임",
+      obs.filter((o) => o.tag === "신체운동"),
+    ],
+    [
+      "자신의 요구를 말로 전달하는 빈도가 증가함",
+      obs.filter((o) => o.tag === "의사소통"),
+    ],
+    [
+      "갈등 상황에서 화해를 시도하는 등 또래 관계 조절 능력이 향상됨",
+      obs.filter((o) => o.tag === "사회관계"),
+    ],
   ];
 
   const spans: ProvenanceSpan[] = [];
@@ -575,7 +698,6 @@ function evaluationProvenance(
   }
   return spans;
 }
-
 
 function evaluationContent(child: Child): string {
   const obs = state.observations.filter((o) => o.childId === child.id);
@@ -1533,6 +1655,11 @@ export function getDraft(
   } else if (type === "plan") {
     content = planContent();
     label = `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`;
+  } else if (type === "plan_monthly") {
+    // 예전에는 이 갈래가 없어 월간 계획안이 맨 아래 아동 문서 갈래로 떨어졌고,
+    // 아이가 없으니 null이 되어 **화면에서 아예 만들어지지 않았다.**
+    content = monthlyPlanContent();
+    label = `${CLASS_NAME} · 월간 계획안 (2026-07)`;
   } else if (type === "play_story") {
     content = playStoryContent();
     label = `${CLASS_NAME} · 월간 놀이이야기`;
@@ -1575,7 +1702,8 @@ export function getDraft(
     if (template?.structure) {
       doc.templateId = template.id;
       doc.cells = buildDocumentCells(template, content);
-      if (type === "journal") doc.cellProvenance = journalCellProvenance(doc, day);
+      if (type === "journal")
+        doc.cellProvenance = journalCellProvenance(doc, day);
       /*
         생성과 동시에 **초안 파일**을 만들어 둔다.
 

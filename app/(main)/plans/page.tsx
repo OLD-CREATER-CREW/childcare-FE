@@ -3,8 +3,13 @@
 import { useMemo, useState } from "react";
 import { Lightbulb, Sparkles } from "lucide-react";
 import { MONTH_LABEL, WEEK_LABEL } from "@/lib/constants";
-import { useActivityRecommendations, useChildren } from "@/lib/queries";
+import {
+  useActivityRecommendations,
+  useChildren,
+  useDocumentDraft,
+} from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
+import { PlanBlocks } from "@/components/plan/PlanBlocks";
 import { N, Notice, PageHead, Skeleton, SpecBar } from "@/components/ui";
 
 const DOMAIN_LABEL: Record<string, string> = {
@@ -42,6 +47,9 @@ export default function PlansPage() {
   const rec = recQuery.data;
 
   const docType = period === "monthly" ? "plan_monthly" : "plan";
+  // 블록 편집기가 "이 문서의 이 칸"을 가리켜야 한다(EP-055) — 문서 번호가 필요하다.
+  const draftQuery = useDocumentDraft(docType, null);
+  const documentId = draftQuery.data?.documentId ?? null;
   const periodLabel = period === "monthly" ? MONTH_LABEL : WEEK_LABEL;
 
   return (
@@ -168,6 +176,23 @@ export default function PlansPage() {
           )
         }
         emptyMessage="계획안을 만들 누적 기록이 부족합니다. 하루 기록을 먼저 남겨 주세요."
+        /*
+          블록 편집(SCR-007) — 초안은 놀이 다섯 개가 `⋅`로 이어진 한 줄로 온다.
+          서식이 이미 칸과 머리표를 정해 두었으니 나눠 담아 칸마다·놀이마다
+          고치게 한다. 작업본 저장·확정·파일은 워크벤치가 그대로 맡는다.
+        */
+        editorView={
+          documentId == null
+            ? undefined
+            : ({ working, setWorking }) => (
+                <PlanBlocks
+                  type={docType}
+                  documentId={documentId}
+                  working={working}
+                  setWorking={setWorking}
+                />
+              )
+        }
         source={<PlanSource period={period} topic={topic} />}
       />
 

@@ -59,6 +59,7 @@ export function DocumentWorkbench({
   generateHint,
   canGenerate = true,
   provenanceView,
+  editorView,
 }: {
   type: DocType;
   childId?: string | null;
@@ -101,6 +102,21 @@ export function DocumentWorkbench({
    * 나타나지 않아 다른 문서 화면은 그대로다.
    */
   provenanceView?: (working: string) => React.ReactNode;
+  /**
+   * 평문 편집기를 대신할 화면. 계획안의 블록 편집기가 여기 온다(SCR-007).
+   *
+   * 통짜 `textarea`를 그대로 두면 놀이 다섯 개가 `⋅`로 이어진 200자 한 줄을
+   * 교사가 직접 자르고 붙여야 한다. 대신 그릴 화면이 있으면 여기로 받는다 —
+   * 작업본 자동 저장·확정·파일은 워크벤치가 그대로 맡는다.
+   *
+   * 초안이 예상한 모양이 아닐 수도 있으므로, **되돌아갈 길을 함께 둔다**
+   * (「평문으로 보기」 토글).
+   */
+  editorView?: (args: {
+    working: string;
+    setWorking: (next: string) => void;
+    editable: boolean;
+  }) => React.ReactNode;
 }) {
   const { toast } = useApp();
   const draftQuery = useDocumentDraft(type, childId, date);
@@ -134,6 +150,10 @@ export function DocumentWorkbench({
   const hasCells = (doc?.cells.length ?? 0) > 0;
   const [cellView, setCellView] = useState(true);
   const showCells = hasCells && cellView;
+
+  /** 블록 편집기가 있으면 그쪽이 기본이다. 평문으로 되돌아갈 수 있다. */
+  const [blockView, setBlockView] = useState(true);
+  const showBlocks = editorView != null && blockView && !hasCells;
 
   /** 생성 경과 — 몇 분짜리 작업이라 "돌고 있다"는 표시만으로는 부족하다 */
   const [elapsed, setElapsed] = useState(0);
@@ -318,6 +338,24 @@ export function DocumentWorkbench({
               쓸 수 있어야 한다 — 문서 전체를 한 번에 훑어 고치는 편이 빠른
               경우가 있고, 서버도 두 경로를 모두 받는다(DraftUpdateIn).
             */}
+            {/*
+              블록/평문 전환. 초안이 서식이 정한 모양을 벗어나면 블록 편집기가
+              나눠 담지 못하는데, 그때 교사가 통짜로라도 고칠 수 있어야 한다.
+            */}
+            {editorView != null && !hasCells && !showSources && (
+              <button
+                className="btn ml-auto px-2.5 py-1 text-[12.5px]"
+                onClick={() => setBlockView((v) => !v)}
+                title={
+                  blockView
+                    ? "문서 전체를 한 덩어리로 편집"
+                    : "칸·놀이 단위로 나눠 보기"
+                }
+              >
+                {blockView ? <Type size={13} /> : <LayoutGrid size={13} />}
+                {blockView ? "평문으로 보기" : "블록으로 보기"}
+              </button>
+            )}
             {hasCells && !showSources && (
               <button
                 className="btn ml-auto px-2.5 py-1 text-[12.5px]"
@@ -468,6 +506,8 @@ export function DocumentWorkbench({
               일이 없다 — 실제로 그랬다.
             */
             provenanceView(working)
+          ) : showBlocks && status === "draft" ? (
+            editorView!({ working, setWorking, editable: true })
           ) : showCells ? (
             <DocumentCells
               type={type}

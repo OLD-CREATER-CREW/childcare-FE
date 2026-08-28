@@ -108,6 +108,73 @@ function specUserAccount(u: UserAccount): SpecUserAccount {
   };
 }
 
+/**
+ * 계획안 칸 하나를 다시 만든 대역 문안(EP-055). 계획안 칸이 아니면 null.
+ *
+ * 서식 프로필이 정한 칸 이름과 머리표(⋅)를 그대로 낸다 — 화면이 이 모양을
+ * 전제로 블록을 다시 채우기 때문이다(`lib/blocks/plan.ts`).
+ */
+function mockPlanBlock(label: string): string | null {
+  const bullets = (items: string[]) => items.map((t) => "⋅" + t).join(" ");
+
+  const week = /^주차별 놀이\s*(\d+)\s*주$/.exec(label);
+  if (week) {
+    const n = Number(week[1]);
+    return [
+      `${n}주 < (대역) 다시 만든 소주제 >`,
+      bullets([
+        "물을 담았다 부으며 놀아요",
+        "물에 뜨는 것을 찾아봐요",
+        "얼음을 만져보고 녹는 걸 지켜봐요",
+        "친구와 물을 주고받아요",
+      ]),
+    ].join("\n");
+  }
+
+  if (label.startsWith("일과별 계획")) {
+    const name = label.replace("일과별 계획", "").trim() || "일과";
+    return [
+      name,
+      bullets([
+        "(대역) 이 일과에서 교사가 무엇을 어떻게 지원하는지 적는다.",
+        "영아의 상태를 개별적으로 살피며 필요한 도움을 준다.",
+      ]),
+    ].join("\n");
+  }
+
+  if (label === "교사의 기대")
+    return [
+      "교사의 기대",
+      bullets([
+        "(대역) 이 달에 영아가 무엇을 경험하기를 바라는지 적는다.",
+        "친구와 함께 놀이하며 즐거움을 나눈다.",
+      ]),
+    ].join("\n");
+
+  if (label === "주간 놀이")
+    return [
+      "주간 놀이",
+      bullets([
+        "(대역) 이 주에 할 실내놀이를 나열한다",
+        "물감을 물에 풀어 색이 번지는 걸 봐요",
+        "스펀지로 물을 빨아들여 짜 봐요",
+      ]),
+    ].join("\n");
+
+  if (label === "발달영역 연계")
+    return [
+      "발달영역 연계",
+      "자연탐구 – 탐구과정 즐기기: (대역) 이 주의 놀이가 그 내용범주와 어떻게 이어지는지 한 문장으로 잇는다.",
+    ].join("\n");
+
+  if (label === "놀이 주제" || label === "주제")
+    return [label, "(대역) 다시 만든 놀이 주제"].join("\n");
+
+  if (label === "놀이 기간" || label === "기간") return null;
+
+  return null;
+}
+
 function specDocument(id: number, doc: DocumentDraft): SpecDocument {
   const confirmed = doc.status !== "draft";
   return {
@@ -1041,7 +1108,16 @@ export const handlers = [
     const activity = body.activity;
 
     let text: string;
-    if (label.startsWith("소주제")) {
+    /*
+      계획안(SCR-007)은 칸 이름이 서식 프로필에서 온다 — `주차별 놀이 2주`,
+      `일과별 계획 오전간식 (9:30 ~ 9:50)` 같은 모양이다. 놀이이야기 칸 이름만
+      알던 시절의 분기를 그대로 두면 2주를 다시 만들었는데 「놀이 속 배움」이
+      돌아온다(실제로 그랬다). 대역 백엔드도 같은 규칙으로 답한다.
+    */
+    const planText = mockPlanBlock(label);
+    if (planText !== null) {
+      text = planText;
+    } else if (label.startsWith("소주제")) {
       const n = Number(label.replace(/[^0-9]/g, "")) || 1;
       const title = activity ? `${activity}를 함께 해요` : "다시 만든 놀이";
       text = [
