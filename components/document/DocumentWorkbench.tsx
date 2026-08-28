@@ -318,7 +318,7 @@ export function DocumentWorkbench({
               쓸 수 있어야 한다 — 문서 전체를 한 번에 훑어 고치는 편이 빠른
               경우가 있고, 서버도 두 경로를 모두 받는다(DraftUpdateIn).
             */}
-            {hasCells && (
+            {hasCells && !showSources && (
               <button
                 className="btn ml-auto px-2.5 py-1 text-[12.5px]"
                 onClick={() => setCellView((v) => !v)}
@@ -343,7 +343,7 @@ export function DocumentWorkbench({
                 title={
                   showSources
                     ? "다시 편집하기"
-                    : "어느 구문이 어느 관찰에서 나왔는지 보기"
+                    : "어느 구문이 어느 기록에서 나왔는지 보기"
                 }
               >
                 <FileSearch size={13} />
@@ -461,6 +461,13 @@ export function DocumentWorkbench({
                 {generateLabel}
               </button>
             </div>
+          ) : showSources && provenanceView ? (
+            /*
+              출처 보기가 칸별 보기보다 앞에 온다. 칸이 있는 문서(보육일지)는
+              칸별 보기가 기본이라 순서가 반대면 「출처 보기」를 눌러도 아무
+              일이 없다 — 실제로 그랬다.
+            */
+            provenanceView(working)
           ) : showCells ? (
             <DocumentCells
               type={type}
@@ -470,8 +477,6 @@ export function DocumentWorkbench({
               templateId={doc.templateId}
               editable={status === "draft"}
             />
-          ) : showSources && provenanceView ? (
-            provenanceView(working)
           ) : status === "draft" ? (
             <div className="draftbox">
               <textarea

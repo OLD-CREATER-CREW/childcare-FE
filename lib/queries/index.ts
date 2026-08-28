@@ -24,6 +24,7 @@ export const queryKeys = {
   dailyRecord: (childId: string, date: string) =>
     ["records", childId, date] as const,
   dayRecordedIds: (date: string) => ["records", "recorded", date] as const,
+  dayRecords: (date: string) => ["records", "day", date] as const,
   /**
    * 문서 초안. 날짜 단위 문서(보육일지)는 **날짜까지 키다** — 날짜를 바꾸면
    * 다른 문서이므로 캐시가 섞이면 안 된다. 날짜를 쓰지 않는 문서는 `"any"`다.
@@ -86,6 +87,14 @@ export const useDayRecordedIds = (date: string) =>
   useQuery({
     queryKey: queryKeys.dayRecordedIds(date),
     queryFn: () => apiFn.fetchDayRecordChildIds(date),
+    staleTime: 0,
+  });
+
+/** 그날 반 전체의 하루 기록 — 보육일지 출처 카드가 이 목록에서 나온다. */
+export const useDayRecords = (date: string) =>
+  useQuery({
+    queryKey: queryKeys.dayRecords(date),
+    queryFn: () => apiFn.fetchDayRecords(date),
     staleTime: 0,
   });
 
@@ -338,6 +347,9 @@ export const useSaveDailyRecord = () => {
       qc.invalidateQueries({
         queryKey: queryKeys.dayRecordedIds(input.date),
       });
+      // 같은 조회를 두 모양으로 캐시한다 — 한쪽만 비우면 보육일지 출처 카드가
+      // 방금 고친 기록을 옛 내용으로 보여 준다.
+      qc.invalidateQueries({ queryKey: queryKeys.dayRecords(input.date) });
       // 원천 기록 변경 → 미확정 알림장 초안 무효화
       qc.invalidateQueries({
         queryKey: queryKeys.documentDraft("notice", input.childId),
@@ -549,28 +561,6 @@ export const useDownloadDocumentFile = () =>
       date?: string | null;
     }) => apiFn.downloadDocumentFile(type, childId, date),
   });
-
-/**
- * 보육일지 만들기 — 한 번의 호출로 완성 한글 파일까지 받는다(EP-010).
- *
- * 다른 문서의 「초안 만들기」(`useRegenerateDraft`)와 달리 캐시에 넣을 초안이
- * 없다. 대신 문서가 하나 생겼으므로 목록·지표는 다시 읽는다 — 그래야 대시보드의
- * 문서 수와 「이 날 일지 다시 받기」가 새 문서를 본다.
- */
-export const useGenerateJournalFile = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ date }: { date?: string | null }) =>
-      apiFn.generateJournalFile(date),
-    onSuccess: (_res, { date }) => {
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentDraft("journal", null, date ?? null),
-      });
-      qc.invalidateQueries({ queryKey: queryKeys.metrics });
-      qc.invalidateQueries({ queryKey: queryKeys.checklist });
-    },
-  });
-};
 
 // ---- 양식 템플릿 (SCR-015) ----
 

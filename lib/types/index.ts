@@ -104,6 +104,20 @@ export type ProvenanceSpan = {
   recordIds: number[];
 };
 
+/**
+ * 그날 반 전체의 하루 기록 한 줄 — 보육일지 출처 카드가 쓴다.
+ *
+ * `DailyRecord`(입력 화면의 폼 값)와 다른 형태인 이유: 여기서 필요한 것은
+ * "누가 무엇을 했나"뿐이고, 기록 id가 있어야 출처 표시(FN-022)와 이어진다.
+ */
+export type DayRecord = {
+  recordId: number;
+  childId: string;
+  date: string;
+  activity: string;
+  note: string;
+};
+
 export type DocumentDraft = {
   /**
    * 서버가 매긴 문서 번호. 칸 단위 재생성(EP-055)이 이 값을 필요로 한다 —
@@ -141,9 +155,20 @@ export type DocumentDraft = {
    * 그린다. `text`를 함께 받는 이유는 교사가 고치면 위치가 어긋나기 때문이다 —
    * 현재 본문에서 그 문구를 다시 찾아 밑줄을 옮긴다.
    *
-   * null이면 추적하지 않는 문서 타입이다(발달평가서만 켜져 있다).
+   * null이면 추적하지 않는 문서 타입이다(발달평가서·보육일지만 켜져 있다).
    */
   provenance: ProvenanceSpan[] | null;
+  /**
+   * 칸별 출처 — 칸 단위 문서(보육일지)의 표시가 여기 온다.
+   *
+   * `provenance`와 따로인 이유: 위치가 **그 칸 안에서의 값**이다. 평문 본문의
+   * 위치로 환산할 수는 있지만, 칸 텍스트를 이어 붙이는 규칙(라벨을 앞에 붙이는가,
+   * 빈 칸을 세는가)이 서버·화면 두 곳에 생겨 어긋나기 시작한다. 칸을 칸으로
+   * 다루는 편이 정직하다.
+   *
+   * 칸 키 → 그 칸의 span 목록. 표시가 없는 칸은 키 자체가 없다.
+   */
+  cellProvenance: Record<string, ProvenanceSpan[]>;
   /** 완성 문서 파일 키. null이면 아직 없다 — 이유는 `fileRenderStatus`가 말한다. */
   fileKey: string | null;
   fileRenderStatus: FileRenderStatus;

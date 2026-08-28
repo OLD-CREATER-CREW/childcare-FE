@@ -68,7 +68,9 @@ import type {
   DevelopmentDomain,
   DocStatus,
   DocType,
+  DayRecord,
   DocumentCell,
+  ProvenanceSpan,
   DocumentDraft,
   FileRenderStatus,
   FormTemplate,
@@ -173,16 +175,33 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
     provenance:
       spec.provenance == null
         ? null
-        : (spec.provenance.draft ?? []).map((s) => ({
-            start: s.start,
-            length: s.length,
-            text: s.text,
-            recordIds: s.record_ids ?? [],
-          })),
+        : (spec.provenance.draft ?? []).map(mapSpan),
+    // 칸별 표시. 없으면 빈 객체 — 화면이 칸마다 조회하므로 null을 만들지 않는다.
+    cellProvenance: Object.fromEntries(
+      Object.entries(spec.provenance?.cells ?? {}).map(([key, spans]) => [
+        key,
+        (spans ?? []).map(mapSpan),
+      ]),
+    ),
     fileKey: spec.file_key ?? null,
     // 값이 없으면 "아직 만들지 않음"으로 본다 — `file_key`가 없는데 상태까지
     // 없으면 화면이 「내려받기」를 띄울 근거가 없다.
     fileRenderStatus: spec.file_render_status ?? "not_requested",
+  };
+}
+
+/** 출처 span 하나 — 본문용과 칸용이 같은 모양이라 한 곳에서 옮긴다. */
+function mapSpan(s: {
+  start: number;
+  length: number;
+  text: string;
+  record_ids?: number[];
+}): ProvenanceSpan {
+  return {
+    start: s.start,
+    length: s.length,
+    text: s.text,
+    recordIds: s.record_ids ?? [],
   };
 }
 
@@ -589,13 +608,30 @@ export const fetchDailyRecord = async (
   };
 };
 
+/**
+ * 그날 반 전체의 하루 기록(EP-008).
+ *
+ * 보육일지의 원천이 이것이고, 출처 표시(FN-022)가 가리키는 기록 id도 여기서
+ * 온다 — 서버가 일지를 만들 때 쓴 기록이 정확히 이 목록이다(window="date").
+ */
+export const fetchDayRecords = async (date: string): Promise<DayRecord[]> => {
+  const list = await api.get<ListEnvelope<SpecRecord>>(`/records?date=${date}`);
+  return list.items.map((r) => ({
+    recordId: r.record_id,
+    childId: intToChildId(r.child_id),
+    date: r.date,
+    activity: r.activity ?? "",
+    note: r.note ?? "",
+  }));
+};
+
 // 특정 날짜에 하루 기록이 있는 아이들의 UI id 집합 — "기록 완료" 판정용(EP-008).
 // 실 서버 ChildOut에는 recorded 플래그가 없으므로, 그날 records를 조회해 채운다.
 export const fetchDayRecordChildIds = async (
   date: string,
 ): Promise<string[]> => {
-  const list = await api.get<ListEnvelope<SpecRecord>>(`/records?date=${date}`);
-  return list.items.map((r) => intToChildId(r.child_id));
+  const rows = await fetchDayRecords(date);
+  return rows.map((r) => r.childId);
 };
 
 export const saveDailyRecord = async (
@@ -775,25 +811,6 @@ export const regenerateDocumentBlock = async (
   );
   return r.text ?? "";
 };
-
-/**
- * 보육일지 만들기(EP-010) — 응답이 JSON이 아니라 **완성된 한글 파일**이다.
- *
- * 이 문서에는 화면 안의 검토·수정 단계가 없다. 산출물이 글이 아니라 원에 제출하는
- * 한글 파일이고, 고칠 곳이 있으면 받은 hwpx를 한글에서 직접 고치는 편이 칸을
- * 하나씩 눌러 고치는 것보다 빠르다. 그래서 예전의 다섯 단계(초안 → 칸 편집 →
- * 확정 → 문서 만들기 → 내려받기)를 이 한 번의 호출로 접었다.
- *
- * 서식이 없으면 서버가 **모델을 부르기 전에** 409 `NO_ACTIVE_TEMPLATE`으로 막는다
- * — 화면은 이 코드를 받으면 서식을 올리라고 안내한다(오류지만 비정상은 아니다).
- */
-export const generateJournalFile = async (
-  date?: string | null,
-): Promise<DownloadedFile & { documentId: number | null }> =>
-  api.postFile("/documents/generate", {
-    type: "journal",
-    date: date || TODAY,
-  });
 
 /** EP-027 활동 추천. 서버가 실패해도 빈 목록으로 답한다. */
 export const fetchActivityRecommendations = async (
