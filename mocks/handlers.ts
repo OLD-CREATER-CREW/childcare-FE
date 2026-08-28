@@ -128,6 +128,18 @@ function specDocument(id: number, doc: DocumentDraft): SpecDocument {
     cells: doc.cells.map(specDocumentCell),
     file_key: doc.fileKey,
     file_render_status: doc.fileRenderStatus,
+    // FN-022 — 본문에는 표시가 없고 위치만 온다. null이면 추적 안 하는 타입.
+    provenance:
+      doc.provenance == null
+        ? null
+        : {
+            draft: doc.provenance.map((sp) => ({
+              start: sp.start,
+              length: sp.length,
+              text: sp.text,
+              record_ids: sp.recordIds,
+            })),
+          },
     created_at: doc.generatedAt,
     confirmed_at: confirmed ? doc.generatedAt : null,
     sent_at: doc.status === "sent" ? doc.generatedAt : null,

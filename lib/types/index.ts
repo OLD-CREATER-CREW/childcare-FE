@@ -94,6 +94,16 @@ export type PhotoSuggestion = {
   }[];
 };
 
+/** 초안의 한 구문과 그 출처(FN-022). */
+export type ProvenanceSpan = {
+  /** AI 초안에서의 위치. 교사가 고친 뒤에는 `text`로 다시 찾는다. */
+  start: number;
+  length: number;
+  text: string;
+  /** 근거가 된 하루 기록 id. 관찰 타임라인의 항목 id와 같은 값이다. */
+  recordIds: number[];
+};
+
 export type DocumentDraft = {
   /**
    * 서버가 매긴 문서 번호. 칸 단위 재생성(EP-055)이 이 값을 필요로 한다 —
@@ -124,6 +134,16 @@ export type DocumentDraft = {
    * 캐시한다. 문서마다 같은 구조를 다시 받을 이유가 없다.
    */
   cells: DocumentCell[];
+  /**
+   * FN-022 — 어느 구문이 어느 기록에서 나왔는지.
+   *
+   * 본문(`content`·`working`)에는 아무 표시도 없다. 화면이 이 위치에 밑줄을
+   * 그린다. `text`를 함께 받는 이유는 교사가 고치면 위치가 어긋나기 때문이다 —
+   * 현재 본문에서 그 문구를 다시 찾아 밑줄을 옮긴다.
+   *
+   * null이면 추적하지 않는 문서 타입이다(발달평가서만 켜져 있다).
+   */
+  provenance: ProvenanceSpan[] | null;
   /** 완성 문서 파일 키. null이면 아직 없다 — 이유는 `fileRenderStatus`가 말한다. */
   fileKey: string | null;
   fileRenderStatus: FileRenderStatus;

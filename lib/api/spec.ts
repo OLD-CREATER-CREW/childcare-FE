@@ -230,6 +230,21 @@ export type SpecDocument = {
   final?: string | null;
   edit_distance?: number | null;
   source_record_ids?: number[];
+  /**
+   * FN-022 출처 표시. 본문에는 아무 표시도 없고 위치만 여기 온다.
+   *
+   *   {"draft": [{start, length, text, record_ids}], "cells": {칸키: [...]}}
+   *
+   * null = 추적하지 않는 문서 타입 / draft가 빈 배열 = 추적했으나 모델이
+   * 표시를 달지 않음. 둘을 구분해야 규약 준수율을 잴 수 있다.
+   */
+  provenance?: {
+    draft?: { start: number; length: number; text: string; record_ids: number[] }[];
+    cells?: Record<
+      string,
+      { start: number; length: number; text: string; record_ids: number[] }[]
+    >;
+  } | null;
   citations?: unknown[];
   /** 놀이이야기(play_story)만 채워진다. 다른 문서는 없거나 빈 배열. */
   photo_suggestions?: SpecPhotoSuggestion[];

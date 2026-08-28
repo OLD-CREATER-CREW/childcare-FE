@@ -2,8 +2,13 @@
 
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { useChildren, useObservations } from "@/lib/queries";
+import {
+  useChildren,
+  useDocumentDraft,
+  useObservations,
+} from "@/lib/queries";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
+import { ProvenanceReader } from "@/components/document/ProvenanceReader";
 import {
   Avatar,
   Notice,
@@ -21,6 +26,8 @@ export default function EvaluationsPage() {
   const [picked, setPicked] = useState<string | null>(null);
   const childId = picked ?? kids[0]?.id ?? "";
   const obsQuery = useObservations(childId);
+  // 출처 표시는 문서에 딸려 온다. 워크벤치도 같은 훅을 쓰므로 같은 캐시를 본다.
+  const draftQuery = useDocumentDraft("evaluation", childId);
 
   const child = kids.find((c) => c.id === childId);
   const totalObs =
@@ -51,6 +58,23 @@ export default function EvaluationsPage() {
         key={childId}
         type="evaluation"
         childId={childId}
+        /*
+          출처 보기(FN-022) — 초안의 어느 구문이 어느 관찰에서 나왔는지.
+          `provenance`가 null이면(추적 안 하는 타입·구버전 서버) 토글이 붙지
+          않아 화면이 지금과 똑같다.
+        */
+        provenanceView={
+          draftQuery.data?.provenance
+            ? (working) => (
+                <ProvenanceReader
+                  text={working}
+                  spans={draftQuery.data?.provenance ?? []}
+                  timeline={obsQuery.data?.timeline ?? []}
+                  childId={childId}
+                />
+              )
+            : undefined
+        }
         source={
           <>
             {child && (

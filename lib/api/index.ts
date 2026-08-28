@@ -169,6 +169,16 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
     templateId: spec.template_id ?? null,
     // 템플릿 주도 문서만 칸이 온다. 평문 폴백 문서는 빈 배열이 정상이다.
     cells: (spec.cells ?? []).map(mapDocumentCell),
+    // 출처 표시(FN-022). 서버가 안 주면 null — "추적 안 함"과 같은 뜻이다.
+    provenance:
+      spec.provenance == null
+        ? null
+        : (spec.provenance.draft ?? []).map((s) => ({
+            start: s.start,
+            length: s.length,
+            text: s.text,
+            recordIds: s.record_ids ?? [],
+          })),
     fileKey: spec.file_key ?? null,
     // 값이 없으면 "아직 만들지 않음"으로 본다 — `file_key`가 없는데 상태까지
     // 없으면 화면이 「내려받기」를 띄울 근거가 없다.

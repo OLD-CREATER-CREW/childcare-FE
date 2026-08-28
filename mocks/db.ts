@@ -25,8 +25,10 @@ import type {
   UserAccount,
   UserAccountInput,
   UserAccountPatch,
+  ProvenanceSpan,
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
+import { recordIdToInt } from "@/lib/api/spec";
 import { applyTemplate } from "@/lib/templates";
 import { analyzeHwpx, fillHwpx, type HwpxAnalysis } from "@/lib/hwpx";
 import { JOURNAL_SAMPLE_CELL_TEXT } from "@/mocks/journal-sample";
@@ -483,6 +485,47 @@ function playStoryContent(): string {
   ].join("\n");
 }
 
+/**
+ * 목 출처 표시(FN-022) — 초안의 어느 구문이 어느 관찰에서 나왔는지.
+ *
+ * 실 서버는 모델이 붙인 태그를 떼어 위치를 계산한다. 목에서는 그 결과 모양만
+ * 흉내 낸다 — 초안 문구를 **본문에서 실제로 찾아** 위치를 잡으므로, 화면이
+ * 밑줄을 엉뚱한 곳에 그리면 그것은 화면의 잘못이다(목이 거짓 좌표를 주는 것이
+ * 아니다).
+ *
+ * 짝지을 관찰이 없으면 빈 배열을 준다 — "추적했으나 표시 없음"이고, 화면이 그
+ * 상태를 견디는지도 확인되어야 한다.
+ */
+function evaluationProvenance(
+  child: Child,
+  content: string,
+): ProvenanceSpan[] {
+  const obs = state.observations.filter((o) => o.childId === child.id);
+  if (obs.length === 0) return [];
+
+  // 문구 → 그 문구의 근거가 될 관찰. 실제 초안 문장에서 고른다.
+  const pairs: [string, ObservationEntry[]][] = [
+    ["계단 오르내리기·달리기에서 안정적인 신체 조절을 보임", obs.filter((o) => o.tag === "신체운동")],
+    ["자신의 요구를 말로 전달하는 빈도가 증가함", obs.filter((o) => o.tag === "의사소통")],
+    ["갈등 상황에서 화해를 시도하는 등 또래 관계 조절 능력이 향상됨", obs.filter((o) => o.tag === "사회관계")],
+  ];
+
+  const spans: ProvenanceSpan[] = [];
+  for (const [phrase, sources] of pairs) {
+    if (sources.length === 0) continue;
+    const at = content.indexOf(phrase);
+    if (at < 0) continue; // 서식이 바뀌어 문구가 없으면 조용히 건너뛴다
+    spans.push({
+      start: at,
+      length: phrase.length,
+      text: phrase,
+      recordIds: sources.slice(0, 2).map((o) => recordIdToInt(o.id)),
+    });
+  }
+  return spans;
+}
+
+
 function evaluationContent(child: Child): string {
   const obs = state.observations.filter((o) => o.childId === child.id);
   const byDomain = DEV_DOMAINS.map(
@@ -631,6 +674,8 @@ function seedDocuments() {
   state.documents.set(docKey("plan", null), {
     // 목 문서에도 번호가 있어야 한다 — 화면이 칸 재생성(EP-055)에 쓴다.
     documentId: nextMockDocumentId(),
+    // 계획안은 출처를 추적하지 않는다(발달평가서만 켜져 있다).
+    provenance: null,
     type: "plan",
     childId: null,
     label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
@@ -1447,6 +1492,11 @@ export function getDraft(
   }
   const doc: DocumentDraft = {
     documentId: nextMockDocumentId(),
+    // 발달평가서만 출처를 추적한다 — 나머지는 null("추적 안 함").
+    provenance:
+      type === "evaluation" && childId
+        ? evaluationProvenance(getChild(childId)!, content)
+        : null,
     type,
     childId: type === "notice" || type === "evaluation" ? childId : null,
     label,

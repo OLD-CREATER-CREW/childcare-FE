@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
   CheckCircle2,
+  FileSearch,
   LayoutGrid,
   Maximize2,
   Minimize2,
@@ -57,6 +58,7 @@ export function DocumentWorkbench({
   generateLabel = "초안 만들기",
   generateHint,
   canGenerate = true,
+  provenanceView,
 }: {
   type: DocType;
   childId?: string | null;
@@ -88,6 +90,17 @@ export function DocumentWorkbench({
   /** false면 「초안 만들기」를 막는다 — 놀이이야기에서 반을 아직 안 고른 경우.
    *  서버도 400으로 막지만, 누르기 전에 알려 주는 편이 낫다. */
   canGenerate?: boolean;
+  /**
+   * 출처 보기 화면(FN-022). 주면 초안 영역에 **읽기/편집 토글**이 붙는다.
+   *
+   * 밑줄은 `textarea` 안에 그릴 수 없어 읽기 전용 뷰를 따로 둔다. 교사의 일이
+   * 둘로 나뉘어 있어 오히려 맞는 구분이다 — "사실이 맞나 확인하는" 일과
+   * "문장을 고치는" 일.
+   *
+   * 화면이 현재 작업본을 알아야 하므로 함수로 받는다. 주지 않으면 토글도
+   * 나타나지 않아 다른 문서 화면은 그대로다.
+   */
+  provenanceView?: (working: string) => React.ReactNode;
 }) {
   const { toast } = useApp();
   const draftQuery = useDocumentDraft(type, childId, date);
@@ -104,6 +117,8 @@ export function DocumentWorkbench({
   const [savedTick, setSavedTick] = useState(false);
   /** 원천 기록 패널을 접어 문서를 화면 폭 전체로 본다. 시연·긴 문서 검토용. */
   const [wide, setWide] = useState(false);
+  /** 출처 보기 켜짐 여부. `provenanceView`가 있을 때만 뜻이 있다. */
+  const [showSources, setShowSources] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
@@ -317,9 +332,27 @@ export function DocumentWorkbench({
                 {cellView ? "평문으로 보기" : "칸별로 보기"}
               </button>
             )}
-            {doc && (
+            {/*
+              출처 보기(FN-022). 밑줄은 textarea 안에 그릴 수 없어 읽기 전용
+              뷰와 토글한다. 이 버튼은 `provenanceView`를 준 화면에만 붙는다.
+            */}
+            {doc && provenanceView && (
               <button
                 className={`btn px-2.5 py-1 text-[12.5px] ${hasCells ? "" : "ml-auto"}`}
+                onClick={() => setShowSources((v) => !v)}
+                title={
+                  showSources
+                    ? "다시 편집하기"
+                    : "어느 구문이 어느 관찰에서 나왔는지 보기"
+                }
+              >
+                <FileSearch size={13} />
+                {showSources ? "편집으로" : "출처 보기"}
+              </button>
+            )}
+            {doc && (
+              <button
+                className={`btn px-2.5 py-1 text-[12.5px] ${hasCells && !provenanceView ? "" : provenanceView ? "" : "ml-auto"}`}
                 onClick={() => setWide((v) => !v)}
                 title={wide ? "원천 기록을 다시 보기" : "문서를 넓게 보기"}
               >
@@ -437,6 +470,8 @@ export function DocumentWorkbench({
               templateId={doc.templateId}
               editable={status === "draft"}
             />
+          ) : showSources && provenanceView ? (
+            provenanceView(working)
           ) : status === "draft" ? (
             <div className="draftbox">
               <textarea
