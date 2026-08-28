@@ -29,6 +29,7 @@ import type {
 } from "@/lib/types";
 import { DEV_DOMAINS } from "@/lib/types";
 import { recordIdToInt } from "@/lib/api/spec";
+import type { SpecCitation } from "@/lib/api/spec";
 import { applyTemplate } from "@/lib/templates";
 import { analyzeHwpx, fillHwpx, type HwpxAnalysis } from "@/lib/hwpx";
 import { JOURNAL_SAMPLE_CELL_TEXT } from "@/mocks/journal-sample";
@@ -664,6 +665,119 @@ function journalCellProvenance(
   return out;
 }
 
+/**
+ * 목 근거 자료 — **실서버가 실제로 넣은 값의 모양을 그대로 쓴다.**
+ *
+ * 청크 본문·출처 경로·슬롯 이름 모두 로컬 실서버에서 뽑아 온 것이다(문서 323).
+ * 화면이 이 모양을 전제로 문서 이름을 뽑고 슬롯으로 묶으므로, 목이 다른 모양을
+ * 내면 목으로 만든 화면이 실서버에서 어긋난다.
+ *
+ * 검색 대상이 아닌 타입(알림장)은 빈 배열이 정상이다 — 그 상태도 화면이 견뎌야
+ * 하고, 「근거를 찾지 못했습니다」를 밝히는 자리가 있다.
+ */
+/** 목 문서는 화면 타입으로 들고 있으므로 여기서 한 번 옮긴다. */
+function mapMockCitations(type: DocType) {
+  return mockCitations(type).map((c) => ({
+    doc: c.source.includes("nuri")
+      ? "누리과정 (3~5세)"
+      : c.source.includes("standard")
+        ? "표준보육과정 (0~2세)"
+        : "어린이집 평가 매뉴얼",
+    where: [c.section, c.subsection].filter(Boolean).join(" › "),
+    page: c.page ?? null,
+    text: c.chunk,
+    slot: c.slot ?? null,
+  }));
+}
+
+function mockCitations(type: DocType): SpecCitation[] {
+  if (type === "notice") return [];
+
+  const STANDARD = "reference/standard_guide(0~2)/standard_guide_v5.md";
+  const NURI = "reference/nuri_guide(3~5)/nuri_guide_v5.md";
+  const EVAL = "reference/eval_guide/eval_guide_v2.md";
+
+  if (type === "journal")
+    return [
+      {
+        source: EVAL,
+        section: "4. 건강·안전",
+        subsection: "4-1 실내외 공간의 청결과 안전",
+        page: 88,
+        chunk:
+          "실내외 공간을 청결하고 안전하게 관리한다. 놀이 공간과 놀잇감을 주기적으로 점검하고, 위험 요인을 발견하면 즉시 조치한다. 영유아가 안전하게 놀이할 수 있도록 공간을 구성하고 정기적으로 환기한다.",
+        slot: "평가지표 4-1",
+      },
+      {
+        source: EVAL,
+        section: "2. 보육과정 운영",
+        subsection: "2-2 일과 운영",
+        page: 41,
+        chunk:
+          "영유아의 흥미와 요구를 반영하여 일과를 운영한다. 놀이 시간을 충분히 확보하고, 영유아가 원하는 놀이를 지속할 수 있도록 융통성 있게 조정한다. 교사는 관찰한 내용을 일지에 기록하여 다음 놀이 지원의 근거로 삼는다.",
+        slot: "평가지표 2-2",
+      },
+      {
+        source: STANDARD,
+        section: "I. 신체운동·건강",
+        subsection: "",
+        page: 225,
+        chunk:
+          "1. 목표\n\n실내외에서 신체활동을 즐기고, 건강하고 안전한 생활을 한다.\n\n1) 신체활동에 즐겁게 참여한다.\n2) 건강한 생활습관을 기른다.\n3) 안전한 생활습관을 기른다.",
+        slot: "신체운동·건강",
+      },
+    ];
+
+  // 발달평가서·계획안·놀이이야기 — 발달영역별로 나눠 검색한 모양 그대로.
+  return [
+    {
+      source: STANDARD,
+      section: "I. 신체운동·건강",
+      subsection: "",
+      page: 225,
+      chunk:
+        "| 내용범주 | 내용 |\n| --- | --- |\n| 신체활동 즐기기 | · 신체를 인식하고 움직인다.<br>· 신체 움직임을 조절한다.<br>· 기초적인 이동운동, 제자리 운동, 도구를 이용한 운동을 한다. |",
+      slot: "신체운동·건강",
+    },
+    {
+      source: STANDARD,
+      section: "I. 신체운동·건강",
+      subsection: "",
+      page: 215,
+      chunk:
+        "1. 목표\n\n실내외에서 신체활동을 즐기고, 건강하고 안전한 일상생활을 경험한다.\n\n1) 감각 경험과 신체활동을 즐긴다.\n2) 건강한 일상생활을 경험한다.\n3) 안전한 일상생활을 경험한다.",
+      slot: "신체운동·건강",
+    },
+    {
+      source: STANDARD,
+      section: "일상생활에서 의사소통 능력을 기른다.",
+      subsection: "",
+      page: 221,
+      chunk:
+        "| 내용범주 | 내용 |\n| --- | --- |\n| 듣기와 말하기 | · 표정, 몸짓, 말에 주의를 기울여 듣는다. · 상대방의 이야기를 듣고 말한다. · 자신의 요구와 느낌을 말한다. |",
+      slot: "의사소통",
+    },
+    {
+      source: NURI,
+      section: "Ⅲ. 사회관계",
+      subsection: "“나 잘하죠?”",
+      page: 71,
+      chunk:
+        "바깥 놀이터에서 4세 반과 5세 반 유아들이 함께 놀이하고 있다. 유아들은 모래를 파 커다란 구덩이를 만들었다. 4세 은제는 모래 구덩이를 뛰어넘다가 모래 구덩이 속에 빠진다.\n\n은제 (모래 구덩이를 바라보며) 아, 이거 어려운데….\n\n지원이를 지켜보던 은제가 모래 구덩이 뛰어넘기를 다시 시도한다. 은제는 모래 구덩이 가장자리 끝을 뛰어넘었지만, 두 발로 서서 착지하지 못하고 넘어졌고, 두 손으로 바닥을 짚고 곧바로 일어난다.",
+      slot: "사회관계",
+    },
+    {
+      source: NURI,
+      section: "Ⅳ. 예술경험",
+      subsection: "아름다움 찾아보기",
+      page: 96,
+      chunk:
+        "자연과 생활에서 아름다움을 느끼고 즐긴다. 유아가 일상에서 마주치는 색, 소리, 움직임에 관심을 가지고 그 느낌을 자기 방식으로 표현하도록 지원한다.",
+      slot: "예술경험",
+    },
+  ];
+}
+
 function evaluationProvenance(child: Child, content: string): ProvenanceSpan[] {
   const obs = state.observations.filter((o) => o.childId === child.id);
   if (obs.length === 0) return [];
@@ -850,6 +964,7 @@ function seedDocuments() {
     // 계획안은 출처를 추적하지 않는다(발달평가서·보육일지만 켜져 있다).
     provenance: null,
     cellProvenance: {},
+    citations: mapMockCitations("plan"),
     type: "plan",
     childId: null,
     label: `${CLASS_NAME} · 주간 계획안 (07-13 ~ 07-19)`,
@@ -1678,6 +1793,8 @@ export function getDraft(
         ? evaluationProvenance(getChild(childId)!, content)
         : null,
     cellProvenance: {},
+    // 근거(FN-004). 검색을 안 하는 알림장은 빈 배열이 정상이다.
+    citations: mapMockCitations(type),
     type,
     childId: type === "notice" || type === "evaluation" ? childId : null,
     label,
@@ -2134,8 +2251,7 @@ export function getChecklist(): ChecklistData {
 // ---------- 지표 ----------
 
 /**
- * (r9) 확정자별 지표 — 교사를 줄 세우는 값이 아니라 "AI 초안이 누구의 문체에
- * 잘 맞는지"를 보는 값이다(명세 EP-028). 목은 고정 표본으로 화면만 채운다.
+ * (r9) 확정자별 지표 — 교사를 줄 세우는 값이 아니라 "AI 초안이 누구의 문체에\n* 잘 맞는지"를 보는 값이다(명세 EP-028). 목은 고정 표본으로 화면만 채운다.
  */
 export const MOCK_BY_USER = [
   {

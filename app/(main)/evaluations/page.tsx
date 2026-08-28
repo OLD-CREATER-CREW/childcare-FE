@@ -77,6 +77,7 @@ export default function EvaluationsPage() {
                     obsQuery.data?.timeline ?? [],
                     childId,
                   )}
+                  citations={draftQuery.data?.citations ?? []}
                   hint="점선 밑줄 = 관찰에서 나온 구문 · 눌러서 근거를 봅니다"
                 />
               )

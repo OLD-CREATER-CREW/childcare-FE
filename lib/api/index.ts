@@ -176,6 +176,14 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
       spec.provenance == null
         ? null
         : (spec.provenance.draft ?? []).map(mapSpan),
+    // 근거(FN-004). 검색을 안 하는 타입은 빈 배열이 정상이다.
+    citations: (spec.citations ?? []).map((c) => ({
+      doc: citationDocLabel(c.source),
+      where: [c.section, c.subsection].filter(Boolean).join(" › "),
+      page: c.page ?? null,
+      text: c.chunk ?? "",
+      slot: c.slot ?? null,
+    })),
     // 칸별 표시. 없으면 빈 객체 — 화면이 칸마다 조회하므로 null을 만들지 않는다.
     cellProvenance: Object.fromEntries(
       Object.entries(spec.provenance?.cells ?? {}).map(([key, spans]) => [
@@ -188,6 +196,23 @@ function mapDoc(spec: SpecDocument): DocumentDraft {
     // 없으면 화면이 「내려받기」를 띄울 근거가 없다.
     fileRenderStatus: spec.file_render_status ?? "not_requested",
   };
+}
+
+/**
+ * 근거 파일 경로 → 사람이 읽는 문서 이름.
+ *
+ * 서버는 `reference/nuri_guide(3~5)/nuri_guide_v5.md` 같은 경로를 준다. 교사에게
+ * 파일 경로를 보여 줄 수는 없고, 그렇다고 서버가 이름을 정해 주지도 않는다
+ * (청크 적재 스크립트가 파일을 그대로 기록한다). 경로 조각으로 가른다 —
+ * 근거 문서는 세 종뿐이고 늘어나면 여기 한 줄을 더한다.
+ */
+function citationDocLabel(source: string): string {
+  const path = (source || "").toLowerCase();
+  if (path.includes("nuri")) return "누리과정 (3~5세)";
+  if (path.includes("standard")) return "표준보육과정 (0~2세)";
+  if (path.includes("eval")) return "어린이집 평가 매뉴얼";
+  // 모르는 문서도 감추지 않는다 — 파일 이름만이라도 보여 준다.
+  return source.split("/").pop() || "근거 문서";
 }
 
 /** 출처 span 하나 — 본문용과 칸용이 같은 모양이라 한 곳에서 옮긴다. */

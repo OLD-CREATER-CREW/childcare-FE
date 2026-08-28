@@ -42,7 +42,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, FileSearch, Lock } from "lucide-react";
 import { anchor, split } from "@/lib/blocks/provenance";
-import type { ProvenanceSpan } from "@/lib/types";
+import type { Citation, ProvenanceSpan } from "@/lib/types";
+import { CitationPanel } from "@/components/document/CitationPanel";
 import { Notice } from "@/components/ui";
 
 /** 밑줄을 그릴 글 한 덩어리. 보육일지는 서식의 칸 하나가 이것이다. */
@@ -72,11 +73,18 @@ export type SourceRecordCard = {
 export function ProvenanceReader({
   blocks,
   records,
+  citations = [],
   hint,
 }: {
   blocks: ProvenanceBlock[];
   /** 기록 id → 그 기록의 카드. 화면이 만들어 준다. */
   records: Map<number, SourceRecordCard>;
+  /**
+   * 이 초안이 기대고 있는 근거(FN-004). 기록과 성격이 달라 밑줄이 아니라 목록으로
+   * 보여 준다 — 근거는 "어떤 말로 서술할지"의 기준이라 특정 구문에 1:1로 붙지
+   * 않는다. 억지로 매달면 없는 대응 관계를 있는 것처럼 보여 주게 된다.
+   */
+  citations?: Citation[];
   /** 본문 위에 놓을 한 줄 안내. 화면마다 다르다. */
   hint?: React.ReactNode;
 }) {
@@ -252,6 +260,13 @@ export function ProvenanceReader({
             </p>
           )}
         </div>
+
+        {/*
+          근거는 출처 카드 **아래**에 둔다. 교사가 먼저 묻는 것은 "이 문장이 어느
+          기록에서 나왔나"이고, 근거는 그다음 질문이다. 기본은 접힘이다 — 근거
+          하나가 수백 자라 펼쳐 두면 초안이 화면 밖으로 밀려난다.
+        */}
+        <CitationPanel citations={citations} />
       </div>
     </div>
   );
