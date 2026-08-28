@@ -95,6 +95,12 @@ export type PhotoSuggestion = {
 };
 
 export type DocumentDraft = {
+  /**
+   * 서버가 매긴 문서 번호. 칸 단위 재생성(EP-055)이 이 값을 필요로 한다 —
+   * 그 호출은 "이 문서의 이 칸"을 가리켜야 하고, 문서를 만든 그 기록·근거를
+   * 서버가 되찾는 열쇠가 이것뿐이다.
+   */
+  documentId: number;
   type: DocType;
   /** 아동 단위 문서(알림장·발달평가서)만 값 존재 */
   childId: string | null;

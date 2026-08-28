@@ -30,6 +30,15 @@ export type FolderPhoto = {
   file: File;
   /** 썸네일용 objectURL — 다 쓰면 revokeFolderPhotos 로 반드시 해제한다 */
   url: string;
+  /**
+   * 이 사진에 담긴 아이 수. `countChildrenPerPhoto`가 채운다(기본 1).
+   *
+   * 사진함 내보내기가 **아이마다 폴더를 만들어 같은 파일을 복사**하므로
+   * (`ClassifyPanel.runExport`), 같은 날짜의 같은 파일이 몇 개 아이 폴더에
+   * 있는지를 세면 그것이 곧 그 사진에 몇 명이 나왔는지다. 얼굴을 다시 볼
+   * 필요가 없다 — 분류할 때 이미 낸 답이 폴더 구조에 적혀 있다.
+   */
+  childCount: number;
 };
 
 // File System Access API — Chromium(Electron 포함)에만 있다. 필요한 것만 좁게 선언한다.
@@ -37,18 +46,21 @@ type DirEntry =
   | { kind: "file"; name: string; getFile: () => Promise<File> }
   | { kind: "directory"; name: string; values: () => AsyncIterable<DirEntry> };
 type FileWriter = { write: (data: Blob) => Promise<void>; close: () => Promise<void> };
+/**
+ * 폴더 핸들. 하위 폴더도 같은 타입이라 재귀로 선언한다 — 내보내기가
+ * `아이 이름/촬영일자/` 두 겹을 만들기 때문이다(`ClassifyPanel.runExport`).
+ */
 export type RootDirHandle = {
   name: string;
   values: () => AsyncIterable<DirEntry>;
   getDirectoryHandle: (
     name: string,
     o?: { create?: boolean },
-  ) => Promise<{
-    getFileHandle: (
-      name: string,
-      o?: { create?: boolean },
-    ) => Promise<{ createWritable: () => Promise<FileWriter> }>;
-  }>;
+  ) => Promise<RootDirHandle>;
+  getFileHandle: (
+    name: string,
+    o?: { create?: boolean },
+  ) => Promise<{ createWritable: () => Promise<FileWriter> }>;
   queryPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
   requestPermission?: (o: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
 };
@@ -59,6 +71,9 @@ type PickerWindow = Window & {
 };
 
 const DATE_DIR = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 내보내기가 배정 실패한 사진을 넣는 폴더 이름(`ClassifyPanel.runExport`). */
+export const UNMATCHED_DIR = "미분류";
 
 /** 한 번에 읽을 사진 수 상한 — 썸네일 objectURL 이 그만큼 메모리를 잡는다. */
 export const MAX_FOLDER_PHOTOS = 500;
@@ -94,6 +109,22 @@ export async function pickPhotoFolder(): Promise<{
     throw new FolderCancelledError();
   }
 
+  return { root, ...(await readDatedPhotos(root)) };
+}
+
+/**
+ * **이미 고른 폴더**를 읽는다. 고르는 일과 읽는 일을 나눈 이유는, 사진 폴더를
+ * 한 번 정해 두고 계속 쓰기 때문이다(`photoRoot`) — 볼 때마다 다시 고르게 하면
+ * 그 설정이 아무 의미가 없다.
+ *
+ * 규칙은 `pickPhotoFolder`와 같다: 경로 안의 `YYYY-MM-DD` 폴더를 촬영일로 쓰고,
+ * 날짜 폴더 밖의 사진은 건너뛴다.
+ */
+export async function readDatedPhotos(root: RootDirHandle): Promise<{
+  photos: FolderPhoto[];
+  folderName: string;
+  hitLimit: boolean;
+}> {
   const photos: FolderPhoto[] = [];
   let hitLimit = false;
 
@@ -133,11 +164,44 @@ export async function pickPhotoFolder(): Promise<{
         date: path[dateAt],
         file,
         url: URL.createObjectURL(file),
+        childCount: 1,
       });
     }
   }
 
-  return { root, photos, folderName: root.name, hitLimit };
+  countChildrenPerPhoto(photos);
+  return { photos, folderName: root.name, hitLimit };
+}
+
+/**
+ * 사진마다 **몇 명이 담겼는지**를 채운다(제자리 수정).
+ *
+ * 내보내기가 아이마다 폴더를 만들어 같은 파일을 복사하므로, `(날짜, 파일명,
+ * 크기)`가 같은 것이 몇 개인지가 곧 인원수다. 파일명만으로 세지 않는 이유는
+ * 카카오톡 사진처럼 이름이 겹치기 쉬워서다 — 크기까지 봐야 같은 사진이다.
+ *
+ * 「미분류」 폴더의 사진은 아무 아이에게도 배정되지 않은 것이라 세지 않는다.
+ * 그것까지 세면 배정 안 된 사진이 인원 1명으로 보인다.
+ */
+export function countChildrenPerPhoto(photos: FolderPhoto[]): void {
+  const groups = new Map<string, FolderPhoto[]>();
+  for (const p of photos) {
+    if (p.childName === UNMATCHED_DIR) continue;
+    const key = `${p.date}|${p.name}|${p.file.size}`;
+    const list = groups.get(key);
+    if (list) list.push(p);
+    else groups.set(key, [p]);
+  }
+  // Map 순회는 이 tsconfig(target ES5 계열)에서 downlevelIteration이 필요하다.
+  // 배열로 받아 돌면 설정을 건드리지 않아도 된다.
+  groups.forEach((group) => {
+    // 같은 아이 폴더에 같은 파일이 두 번 들어갈 일은 없지만, 있어도 한 명으로
+    // 센다 — 인원수이지 파일 수가 아니다.
+    const names = new Set(group.map((photo: FolderPhoto) => photo.childName));
+    group.forEach((photo: FolderPhoto) => {
+      photo.childCount = names.size;
+    });
+  });
 }
 
 /** 폴더를 그냥 훑어볼 때 쓰는 사진 한 장 — 날짜·아이를 요구하지 않는다. */
@@ -175,6 +239,19 @@ export async function browsePhotoFolder(): Promise<{
     throw new FolderCancelledError();
   }
 
+  return readAllPhotos(root);
+}
+
+/**
+ * **이미 고른 폴더**의 사진을 구조를 따지지 않고 전부 읽는다.
+ * `browsePhotoFolder`와 달리 폴더를 묻지 않는다 — 사진 폴더는 한 번 정해 두고
+ * 계속 쓰기 때문이다(`photoRoot`).
+ */
+export async function readAllPhotos(root: RootDirHandle): Promise<{
+  photos: BrowsedPhoto[];
+  folderName: string;
+  hitLimit: boolean;
+}> {
   const photos: BrowsedPhoto[] = [];
   let hitLimit = false;
 

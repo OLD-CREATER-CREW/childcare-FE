@@ -274,6 +274,9 @@ const unauthorized = () =>
 
 // ---------- 핸들러 ----------
 
+/** 문체 예시 목 저장소(EP-052/053). 새로고침하면 사라진다. */
+const styleSamples: Record<string, string[]> = {};
+
 export const handlers = [
   // ===== 인증 (EP-001~003, EP-050·051) =====
   //
@@ -1023,6 +1026,87 @@ export const handlers = [
   http.get("/api/metrics/summary", async () => {
     await delay(340);
     return HttpResponse.json(db.getMetricsSpec());
+  }),
+
+  // ===== 이 달의 놀이 (EP-054) =====
+  //
+  // 목 기록의 `activity`를 쉼표로 쪼개 모은다 — 서버(`activity_index`)와 같은
+  // 규칙이다. 규칙이 갈리면 목에서 되던 것이 실 서버에서 안 된다.
+  http.get("/api/records/activities", async ({ request }) => {
+    await delay(160);
+    const url = new URL(request.url);
+    const from = url.searchParams.get("period_from") ?? "";
+    const to = url.searchParams.get("period_to") ?? "";
+    const items = db.getMonthActivities(from, to);
+    return HttpResponse.json({
+      items,
+      total: items.length,
+      period_from: from,
+      period_to: to,
+    });
+  }),
+
+  // ===== 칸 단위 재생성 (EP-055) =====
+  //
+  // 저장하지 않고 텍스트만 돌려주는 계약을 그대로 흉내 낸다. 문안은 대역이라
+  // 내용이 크게 달라지지 않지만, 화면이 "받은 텍스트를 그 칸에 끼워 넣는"
+  // 경로를 밟아 보는 것이 이 목의 몫이다.
+  http.post("/api/documents/:id/block", async ({ request, params }) => {
+    await delay(900);
+    const body = (await request.json()) as {
+      block_label: string;
+      activity?: string;
+    };
+    const label = body.block_label ?? "";
+    const activity = body.activity;
+
+    let text: string;
+    if (label.startsWith("소주제")) {
+      const n = Number(label.replace(/[^0-9]/g, "")) || 1;
+      const title = activity ? `${activity}를 함께 해요` : "다시 만든 놀이";
+      text = [
+        `${n}. ${title}`,
+        "⋅놀이 이야기: (대역) 이 놀이에서 유아가 무엇을 하고 어떻게 이어 갔는지 서술함.",
+        '⋅말풍선 문구 제안: "(교사가 실제 발화로 바꿔 넣는 자리)"',
+        "⋅추천 사진 가이드: 촬영·첨부할 구도와 동작 제안.",
+      ].join("\n");
+    } else if (label.includes("주제")) {
+      text = "놀이 주제\n(대역) 이 달의 놀이 주제";
+    } else {
+      text =
+        "놀이 속 배움\n(대역) 이 기간 유아들이 놀이를 통해 무엇을 경험하고 배웠는지 한 달을 아울러 서술함.";
+    }
+
+    return HttpResponse.json({
+      document_id: Number(params.id),
+      block: label,
+      text,
+      model_used: "mock",
+      tokens_in: 0,
+      tokens_out: 0,
+    });
+  }),
+
+  // ===== 문체 예시 (EP-052/053) =====
+  //
+  // 목은 메모리에만 담는다. 마스킹도 흉내만 낸다 — 여기서 확인하려는 것은
+  // 화면 흐름(등록 → 개수 표시 → 고치기)이지 비식별화 규칙이 아니다.
+  http.get("/api/style-samples", async ({ request }) => {
+    await delay(120);
+    const type = new URL(request.url).searchParams.get("type") ?? "notice";
+    return HttpResponse.json({ type, samples: styleSamples[type] ?? [] });
+  }),
+
+  http.put("/api/style-samples", async ({ request }) => {
+    await delay(220);
+    const body = (await request.json()) as { type: string; samples: string[] };
+    const cleaned = (body.samples ?? [])
+      .map((t) => (t ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (cleaned.length === 0) delete styleSamples[body.type];
+    else styleSamples[body.type] = cleaned;
+    return HttpResponse.json({ type: body.type, samples: cleaned });
   }),
 
   // ===== 설정·시드 (EP-029~031) =====

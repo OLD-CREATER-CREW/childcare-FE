@@ -142,6 +142,7 @@ function mapChild(c: SpecChild): Child {
 
 function mapDoc(spec: SpecDocument): DocumentDraft {
   return {
+    documentId: spec.document_id,
     type: docTypeFromSpec(spec.type),
     childId: spec.child_id ? intToChildId(spec.child_id) : null,
     label: spec.label ?? "",
@@ -643,6 +644,13 @@ export const generateDocumentDraft = async (
   className?: string | null,
   /** 날짜 단위 문서(보육일지)에서 교사가 고른 날. 없으면 오늘. */
   date?: string | null,
+  /**
+   * 놀이이야기가 쓰는 추가 선택(SCR-018). 다른 문서는 넘기지 않는다.
+   *
+   * 자리 인자를 더 늘리지 않으려고 객체로 받는다 — 이 함수는 이미 다섯 개를
+   * 받고 있어서, 여섯 번째부터는 호출부에서 무엇이 무엇인지 읽을 수 없다.
+   */
+  opts?: { picks?: PlayPick[]; playCount?: number },
 ): Promise<DocumentDraft> => {
   const body: {
     type: SpecDocType;
@@ -652,6 +660,8 @@ export const generateDocumentDraft = async (
     period_from?: string;
     period_to?: string;
     topic?: string;
+    picks?: { activity: string; date?: string }[];
+    play_count?: number;
   } = { type: docTypeToSpec(type) };
   if (childId) body.child_id = childIdToInt(childId);
   if (type === "notice" || type === "journal") body.date = date || TODAY;
@@ -676,7 +686,84 @@ export const generateDocumentDraft = async (
   // 기록에서 주제를 뽑는데, 빈 문자열을 보내면 "주제를 줬다"로 읽힌다.
   const trimmed = topic?.trim();
   if (trimmed) body.topic = trimmed;
+
+  // 고른 놀이·개수. 비어 있으면 키를 아예 넣지 않는다 — 서버는 값이 없을 때
+  // 도입 이전과 똑같이 동작하고, 빈 배열을 보내면 "고르긴 골랐다"로 읽힌다.
+  const picks = (opts?.picks ?? [])
+    .map((p) => ({ activity: p.activity.trim(), date: p.date }))
+    .filter((p) => p.activity);
+  if (picks.length > 0) body.picks = picks;
+  if (opts?.playCount) body.play_count = opts.playCount;
+
   return mapDoc(await api.post<SpecDocument>("/documents/generate", body));
+};
+
+/** 교사가 고른 놀이 하나. `date`가 있으면 그날의 그 놀이로 못 박는다. */
+export type PlayPick = { activity: string; date?: string };
+
+/** 기간 안에 실제로 한 놀이(EP-054). 많이 한(며칠 했는가) 순서다. */
+export type MonthActivity = {
+  activity: string;
+  days: number;
+  /** `YYYY-MM-DD` — 화면이 달력에 꽂는다 */
+  dates: string[];
+  recordCount: number;
+  childCount: number;
+};
+
+export const fetchMonthActivities = async (
+  periodFrom: string,
+  periodTo: string,
+  className?: string | null,
+): Promise<MonthActivity[]> => {
+  const params = new URLSearchParams({
+    period_from: periodFrom,
+    period_to: periodTo,
+  });
+  const cls = className?.trim();
+  if (cls) params.set("class_name", cls);
+
+  const r = await api.get<{
+    items: {
+      activity: string;
+      days: number;
+      dates: string[];
+      record_count: number;
+      child_count: number;
+    }[];
+  }>(`/records/activities?${params.toString()}`);
+
+  return (r.items ?? []).map((i) => ({
+    activity: i.activity,
+    days: i.days,
+    dates: i.dates ?? [],
+    recordCount: i.record_count,
+    childCount: i.child_count,
+  }));
+};
+
+/**
+ * 칸 하나만 다시 만든다(EP-055).
+ *
+ * **저장하지 않는다.** 서버는 텍스트만 돌려주고, 반영할지는 화면이 정한다 —
+ * 교사가 새 문안을 보고 무를 수 있어야 한다.
+ */
+export const regenerateDocumentBlock = async (
+  documentId: number,
+  blockLabel: string,
+  opts?: { activity?: string; date?: string },
+): Promise<string> => {
+  const body: { block_label: string; activity?: string; date?: string } = {
+    block_label: blockLabel,
+  };
+  if (opts?.activity) body.activity = opts.activity;
+  if (opts?.date) body.date = opts.date;
+
+  const r = await api.post<{ text: string }>(
+    `/documents/${documentId}/block`,
+    body,
+  );
+  return r.text ?? "";
 };
 
 /**
@@ -1279,6 +1366,34 @@ export const fetchMetrics = async (): Promise<MetricsSummary> => {
     })),
     unattributedCount: s.unattributed_count ?? 0,
   };
+};
+
+// ---------- 문체 예시 (EP-052/053) ----------
+//
+// 기관이 예전에 쓰던 문서 본문. 알림장 초안이 그 원의 말투를 따라가게 하려고
+// 프롬프트 고정부에 실린다(백엔드 `services/style_samples.py`).
+//
+// 서버는 저장하기 전에 아동·교사 이름을 가리므로 **응답이 요청과 다를 수
+// 있다.** 화면은 응답을 그대로 다시 그려야 교사가 무엇이 지워졌는지 본다.
+
+export const fetchStyleSamples = async (type: DocType): Promise<string[]> => {
+  const r = await api.get<{ type: string; samples: string[] }>(
+    `/style-samples?type=${encodeURIComponent(type)}`,
+  );
+  return r.samples ?? [];
+};
+
+export const saveStyleSamples = async (
+  type: DocType,
+  samples: string[],
+): Promise<string[]> => {
+  // 빈 칸은 여기서 걷어낸다 — 서버도 걸러 내지만, 보낸 것과 돌려받은 것의
+  // 개수가 달라지면 화면이 칸을 다시 그리며 커서가 튄다.
+  const r = await api.put<{ type: string; samples: string[] }>("/style-samples", {
+    type,
+    samples: samples.map((t) => t.trim()).filter(Boolean),
+  });
+  return r.samples ?? [];
 };
 
 // ---------- 설정·시드 (EP-029~031) + 로컬 양식 동기화 ----------

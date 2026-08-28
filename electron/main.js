@@ -12,6 +12,7 @@ const {
   ipcMain,
   dialog,
   safeStorage,
+  session,
 } = require("electron");
 const path = require("path");
 const http = require("http");
@@ -230,7 +231,21 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
 };
 
-/** out/ 정적 산출물을 서빙하는 최소 HTTP 서버 (127.0.0.1 임의 포트) */
+/**
+ * 앱 내장 서버의 고정 포트.
+ *
+ * 예전에는 `listen(0)`으로 임의 포트를 받았다. 그러면 앱을 켤 때마다 오리진이
+ * `http://127.0.0.1:51234` → `:49871`로 바뀌는데, **IndexedDB·localStorage는
+ * 오리진마다 따로**라 저장해 둔 것이 매번 빈 상태로 보인다. 기억해 둔 사진
+ * 폴더(`lib/face/photoRoot.ts`)가 실행할 때마다 사라지는 이유가 이것이다.
+ *
+ * 그래서 포트를 못 박는다. 다른 프로그램이 이미 쓰고 있으면 어쩔 수 없이
+ * 임의 포트로 물러서되(앱은 떠야 한다), 그때는 저장된 설정이 보이지 않을 수
+ * 있다는 사실을 로그에 남긴다.
+ */
+const APP_PORT = 47317;
+
+/** out/ 정적 산출물을 서빙하는 최소 HTTP 서버 (127.0.0.1 고정 포트) */
 function serveOutDir(outDir) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -271,8 +286,21 @@ function serveOutDir(outDir) {
       fs.createReadStream(filePath).pipe(res);
     });
 
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    let usedFallback = false;
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE" && !usedFallback) {
+        usedFallback = true;
+        console.warn(
+          `포트 ${APP_PORT}이 이미 쓰이고 있어 임의 포트로 뜹니다 — ` +
+            "저장해 둔 사진 폴더 설정이 보이지 않을 수 있습니다.",
+        );
+        server.listen(0, "127.0.0.1");
+        return;
+      }
+      reject(err);
+    });
+    server.listen(APP_PORT, "127.0.0.1");
+    server.on("listening", () => {
       resolve(`http://127.0.0.1:${server.address().port}`);
     });
   });
@@ -314,7 +342,36 @@ async function createWindow() {
   if (!app.isPackaged) win.webContents.openDevTools({ mode: "detach" });
 }
 
+/**
+ * 파일 시스템 접근 API 권한을 허용한다.
+ *
+ * 교사가 `showDirectoryPicker`로 고른 폴더는 OS 대화상자를 거친 것이므로 이미
+ * 사람의 동의를 받은 것이다. 그런데 저장해 둔 핸들을 다음 실행에서 다시 꺼내면
+ * Chromium이 권한을 한 번 더 묻는데, Electron에는 그 물음을 보여 줄 창이 없어
+ * **조용히 거부**된다 — 폴더를 기억해 둬도 매번 다시 고르게 되는 원인이다.
+ *
+ * 허용 범위는 파일 시스템뿐이고, 나머지 권한(카메라·위치 등)은 기본 동작을
+ * 그대로 둔다 — 이 앱은 그것들을 쓰지 않는다.
+ */
+function allowFileSystemAccess() {
+  // Chromium 버전에 따라 이름이 갈려서 둘 다 받는다.
+  const FILE_SYSTEM = new Set(["fileSystem", "file-system"]);
+  // 이 앱이 쓰지 않는 것들. 쓰지 않으므로 물어 오면 거절한다.
+  const NEVER = new Set(["media", "geolocation", "midi", "midiSysex", "hid", "serial", "usb"]);
+
+  const decide = (permission) => {
+    if (FILE_SYSTEM.has(permission)) return true;
+    if (NEVER.has(permission)) return false;
+    return true; // 나머지는 Electron 기본 동작 그대로 둔다
+  };
+
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(decide(permission)));
+  ses.setPermissionCheckHandler((_wc, permission) => decide(permission));
+}
+
 app.whenReady().then(() => {
+  allowFileSystemAccess();
   registerTemplateIpc();
   registerFaceIpc();
   createWindow();

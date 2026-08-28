@@ -2,15 +2,17 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Sparkles } from "lucide-react";
+import { PenLine, Sparkles } from "lucide-react";
 import { useApp } from "@/lib/store";
 import {
   useDailyRecord,
   useGenerateAllNotices,
   useNoticeQueue,
+  useStyleSamples,
 } from "@/lib/queries";
 import { TODAY } from "@/lib/constants";
 import { DocumentWorkbench } from "@/components/document/DocumentWorkbench";
+import { StyleSampleDialog } from "@/components/document/StyleSampleDialog";
 import {
   Avatar,
   N,
@@ -37,10 +39,41 @@ function statusColor(status: string | null) {
 // SCR-004 알림장 검토·확정 — 생성만 일괄, 검토·확정은 아이별
 function NoticesContent() {
   const params = useSearchParams();
-  const { toast } = useApp();
+  const { auth, toast } = useApp();
   const queueQuery = useNoticeQueue();
   const generateAll = useGenerateAllNotices();
   const queue = queueQuery.data;
+
+  // 기관이 쓰던 알림장(문체 예시). 비어 있으면 아직 등록 전이다.
+  const samplesQuery = useStyleSamples("notice");
+  const sampleCount = samplesQuery.data?.length ?? 0;
+  const [styleOpen, setStyleOpen] = useState(false);
+
+  /**
+   * 처음 만들기 전에 **한 번만** 묻는다.
+   *
+   * 이 기관에 만들어진 초안이 하나도 없고(`generated === 0`) 등록한 예시도
+   * 없을 때가 "처음"이다. 매번 물으면 초안 만들기가 두 걸음이 되고, 안 물으면
+   * 기관 말투를 영영 못 배운다.
+   *
+   * 물었다는 사실을 **이 PC에 남긴다.** 화면 상태로만 두면 건너뛴 교사가 다른
+   * 화면에 갔다 돌아올 때마다 같은 창을 다시 본다 — 등록할 마음이 없는 사람에게
+   * 그것은 그냥 방해다. 서버에 둘 만한 값은 아니다(교사 개인의 응답이지 기관의
+   * 설정이 아니고, 다른 PC에서 다시 한 번 묻는 것은 해가 없다).
+   */
+  const askedKey = `styleSampleAsked:notice:${auth?.centerId ?? "?"}`;
+  useEffect(() => {
+    if (styleOpen) return;
+    if (samplesQuery.data === undefined || !queue) return;
+    if (sampleCount > 0 || queue.generated > 0) return;
+    try {
+      if (localStorage.getItem(askedKey)) return;
+      localStorage.setItem(askedKey, "1");
+    } catch {
+      // 저장을 못 쓰는 환경(시크릿 창 등)이면 물어보는 쪽을 고른다.
+    }
+    setStyleOpen(true);
+  }, [styleOpen, samplesQuery.data, queue, sampleCount, askedKey]);
 
   const runGenerateAll = () =>
     generateAll.mutate(undefined, {
@@ -92,6 +125,16 @@ function NoticesContent() {
           오늘 알림장 진행 현황
           <button
             className="btn ml-auto px-3 py-1.5"
+            onClick={() => setStyleOpen(true)}
+            title="이 어린이집이 쓰던 알림장을 문체 예시로 등록합니다"
+          >
+            <PenLine size={14} />
+            {sampleCount > 0
+              ? `문체 예시 ${sampleCount}개 · 고치기`
+              : "문체 예시 등록"}
+          </button>
+          <button
+            className="btn px-3 py-1.5"
             onClick={runGenerateAll}
             disabled={generateAll.isPending || !queue || queue.ready === 0}
             title="기록이 있는 아이 전원의 초안을 한 번에 만듭니다"
@@ -135,6 +178,12 @@ function NoticesContent() {
           </>
         )}
       </div>
+
+      <StyleSampleDialog
+        open={styleOpen}
+        type="notice"
+        onClose={() => setStyleOpen(false)}
+      />
 
       {childId && (
         <DocumentWorkbench

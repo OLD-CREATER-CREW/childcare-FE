@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { PencilLine, Plus, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { PencilLine, Plus, TrendingUp, X } from "lucide-react";
 import { useApp } from "@/lib/store";
 import {
   useAddObservation,
@@ -38,6 +38,14 @@ export default function ObservationsPage() {
   const addMutation = useAddObservation();
 
   const [range, setRange] = useState("최근 1개월");
+  /**
+   * 매트릭스에서 고른 발달영역. null이면 전체를 본다.
+   *
+   * 매트릭스는 "어느 영역이 활발한가"를 한눈에 보여 주지만, 그 다음에 교사가
+   * 하고 싶은 일은 **그 영역의 관찰만 읽어 보는 것**이다. 예전에는 타임라인을
+   * 눈으로 훑으며 태그를 골라내야 했다 — 관찰이 쌓일수록 못 할 일이 된다.
+   */
+  const [domain, setDomain] = useState<DevelopmentDomain | null>(null);
   const [editTarget, setEditTarget] = useState<ObservationEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [newMemo, setNewMemo] = useState("");
@@ -59,10 +67,36 @@ export default function ObservationsPage() {
     setEditTarget(row);
   };
 
+  // 아이를 바꾸면 필터를 푼다. 그 아이에게는 그 영역의 관찰이 없을 수 있는데,
+  // 필터가 남아 있으면 "기록이 없는 아이"처럼 보인다.
+  const shownChildRef = useRef(childId);
+  useEffect(() => {
+    if (shownChildRef.current === childId) return;
+    shownChildRef.current = childId;
+    setDomain(null);
+  }, [childId]);
+
   const child = kids.find((c) => c.id === childId);
   const maxCount = useMemo(
     () => Math.max(0, ...(obsQuery.data?.domains.map((d) => d.count) ?? [])),
     [obsQuery.data],
+  );
+
+  // `?? []`가 렌더마다 새 배열을 만들어 아래 useMemo가 매번 다시 돈다.
+  const timeline = useMemo(
+    () => obsQuery.data?.timeline ?? [],
+    [obsQuery.data],
+  );
+  /**
+   * 고른 영역의 관찰만 남긴다.
+   *
+   * 한 관찰이 여러 영역에 걸치는 것이 보통이라(놀이 하나가 사회관계이면서
+   * 의사소통일 수 있다) `includes`로 본다 — 대표 태그 하나만 보면 그 관찰이
+   * 다른 영역에서는 없는 것이 된다.
+   */
+  const shown = useMemo(
+    () => (domain ? timeline.filter((r) => r.tags.includes(domain)) : timeline),
+    [timeline, domain],
   );
 
   const applyTags = () => {
@@ -160,7 +194,9 @@ export default function ObservationsPage() {
           <h2>
             <N n={2} />
             발달 5영역 매트릭스
-            <span className="hint">가장 활발한 영역이 진하게 표시됩니다</span>
+            <span className="hint">
+              칸을 누르면 그 영역의 관찰만 봅니다
+            </span>
           </h2>
           {obsQuery.isLoading ? (
             <Skeleton lines={2} />
@@ -168,15 +204,33 @@ export default function ObservationsPage() {
             <QueryError onRetry={() => obsQuery.refetch()} />
           ) : (
             <div className="matrix">
-              {obsQuery.data?.domains.map((d) => (
-                <div
-                  key={d.name}
-                  className={`mcell ${d.count === maxCount && maxCount > 0 ? "hot" : ""}`}
-                >
-                  <div className="num">{d.count}</div>
-                  <div className="lab">{d.name}</div>
-                </div>
-              ))}
+              {obsQuery.data?.domains.map((d) => {
+                const on = domain === d.name;
+                return (
+                  <button
+                    key={d.name}
+                    type="button"
+                    className={`mcell ${on ? "on" : ""} ${
+                      !on && d.count === maxCount && maxCount > 0 ? "hot" : ""
+                    }`}
+                    // 관찰이 없는 영역을 누르면 빈 목록만 나온다 — 누를 수
+                    // 없다는 것을 보여 주는 편이 낫다.
+                    disabled={d.count === 0}
+                    aria-pressed={on}
+                    onClick={() => setDomain(on ? null : d.name)}
+                    title={
+                      d.count === 0
+                        ? `${d.name} 관찰이 아직 없습니다`
+                        : on
+                          ? "눌러서 전체 보기"
+                          : `${d.name} 관찰만 보기`
+                    }
+                  >
+                    <div className="num">{d.count}</div>
+                    <div className="lab">{d.name}</div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -185,21 +239,47 @@ export default function ObservationsPage() {
           <h2>
             <N n={3} />
             메모 누적 타임라인
-            <span className="hint">태그 없는 메모는 수동 태깅으로 보완</span>
+            {domain ? (
+              <span className="hint inline-flex items-center gap-1.5">
+                <span className="tag dom">{domain}</span>
+                {shown.length}건 / 전체 {timeline.length}건
+                <button
+                  className="btn ghost px-2 py-0.5 text-[11.5px]"
+                  onClick={() => setDomain(null)}
+                >
+                  <X size={11} /> 전체 보기
+                </button>
+              </span>
+            ) : (
+              <span className="hint">태그 없는 메모는 수동 태깅으로 보완</span>
+            )}
             <button className="btn ghost ml-auto px-2.5 py-1" onClick={openAdd}>
               <Plus size={14} /> 관찰 추가
             </button>
           </h2>
           {obsQuery.isLoading ? (
             <Skeleton lines={4} />
-          ) : (obsQuery.data?.timeline.length ?? 0) === 0 ? (
+          ) : shown.length === 0 ? (
             <div className="py-4 text-center text-[13px] text-muted">
-              아직 관찰 기록이 없어요 — 하루 기록의 특이사항 메모가 자동으로
-              쌓입니다.
+              {domain ? (
+                <>
+                  <b>{domain}</b>으로 태그된 관찰이 없습니다.{" "}
+                  <button
+                    className="font-bold underline"
+                    onClick={() => setDomain(null)}
+                  >
+                    전체 보기
+                  </button>
+                </>
+              ) : (
+                <>
+                  아직 관찰 기록이 없어요 — 하루 기록의 메모가 자동으로 쌓입니다.
+                </>
+              )}
             </div>
           ) : (
             <div className="tl">
-              {obsQuery.data?.timeline.map((r) => (
+              {shown.map((r) => (
                 <div key={r.id} className="row">
                   <span className="date">{r.date.slice(5)}</span>{" "}
                   {r.tags.length ? (
