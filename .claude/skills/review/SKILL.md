@@ -51,7 +51,7 @@ description: 시니어/보안/아키텍트/QA 4명 페르소나가 Agent 툴로 
 - `Read .claude/skills/review/report-template.md` → 반환 형식 + Severity + 최종 템플릿 확보
 - **프로젝트 FE rule 로드** — 리뷰의 기준이 될 컨벤션 문서를 Read한다. 다음 우선순위로 찾는다:
   1. 프로젝트가 자체 컨벤션 파일을 가지면 그것 — 예: `.claude/rules/fe-convention.md`
-  2. 없으면 `.claude/rules/fe/` 에서 **변경 파일 스택에 맞는** 문서. 어떤 파일이 있는지/어느 것이 맞는지는 프로젝트 `CLAUDE.md` 의 "기술 스택별 rule" 섹션을 참고 (예: Vue3/TS → `vue3-typescript.md`, Vue2/JS → `vue2-javascript.md`, 퍼블리싱 → `publishing-design-system.md`)
+  2. 없으면 `.claude/rules/fe/` 에서 **변경 파일 스택에 맞는** 문서. 어떤 파일이 있는지/어느 것이 맞는지는 프로젝트 `CLAUDE.md` 의 "기술 스택별 rule" 섹션을 참고 (이 프로젝트에는 `project.md`와 퍼블리싱용 `publishing-design-system.md`가 있다)
   3. 변경 파일이 여러 스택에 걸치면 해당 rule을 모두 로드
   - 로드한 rule 본문은 Step 3에서 각 Agent prompt에 **"이 프로젝트에 적용되는 규칙 (최우선 기준)"** 으로 첨부한다.
   - rule 파일을 하나도 찾지 못하면 personas.md의 내장 fallback 체크리스트만으로 진행하고, "프로젝트 rule 미발견 — 기본 컨벤션으로 리뷰함"을 사용자에게 알린다.

@@ -57,10 +57,10 @@ Claude Code 팀 표준 workflow, rules, skills, hooks를 모아둔 폴더입니�
 
 ## 프로젝트 유형별 rule
 
-- 신규 Vue3 / TypeScript: `rules/fe/vue3-typescript.md`
-- Vue2 / JavaScript 레거시: `rules/fe/vue2-javascript.md`
-- Node / AngularJS 등 특수 레거시: `rules/fe/angularjs-legacy.md`
+- 프로젝트 고유 규칙: `rules/project.md`
 - 디자인 시스템 / 퍼블리싱: `rules/fe/publishing-design-system.md`
+
+Vue·AngularJS rule은 이 프로젝트(Next.js·React·TS)에 맞지 않아 제거했습니다.
 
 ## 주의
 

@@ -1,10 +1,9 @@
 ---
 paths:
-  - 'src/**/*.scss'
-  - 'src/**/*.css'
-  - 'src/**/*.vue'
-  - 'src/**/tokens/**'
-  - 'src/**/styles/**'
+  - 'app/**/*.css'
+  - 'app/tokens*.css'
+  - 'components/**/*.tsx'
+  - 'tailwind.config.ts'
 ---
 
 # 디자인 시스템 / 퍼블리싱 기준
