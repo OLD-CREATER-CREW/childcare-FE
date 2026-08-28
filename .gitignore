@@ -11,15 +11,20 @@ tsconfig.tsbuildinfo
 dist/
 
 # env
-.env*.local
+# `.env*.local` 만으로는 `.env.local.bak` 같은 사본이 안 걸린다 — 실제로
+# 로컬에 남아 있었다. 이름이 .env 로 시작하면 전부 막는다.
+.env*
+!.env.example
 
 # local-only settings
 settings.local.json
 .claude/settings.local.json
 
 # oh-my-claudecode / 파일럿 계측 산출물 (기계 생성 — 커밋 대상 아님)
+# `docs/pilot-metrics/` 는 루트 기준이라 `.claude/docs/pilot-metrics/` 를
+# 못 걸러 세션 JSON 하나가 커밋된 적이 있다. 경로 어디에 있든 막는다.
 .omc/
-docs/pilot-metrics/
+**/pilot-metrics/
 
 # 산출물 스펙 문서 (로컬 참고용 — 커밋 대상 아님)
 docs/spec/

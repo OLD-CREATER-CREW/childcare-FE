@@ -37,11 +37,10 @@
 
 ## 기술 스택별 rule
 
-아래 rule 중 프로젝트에 맞는 문서를 우선 참고합니다.
+이 프로젝트는 **Next.js 14 (App Router) · React 18 · TypeScript**입니다.
+팀 표준에 있던 Vue·AngularJS rule은 해당 사항이 없어 제거했습니다.
 
-- Vue3 / TypeScript: `.claude/rules/fe/vue3-typescript.md`
-- Vue2 / JavaScript: `.claude/rules/fe/vue2-javascript.md`
-- Node / AngularJS 등 레거시: `.claude/rules/fe/angularjs-legacy.md`
+- 프로젝트 고유 규칙: `.claude/rules/project.md`
 - 디자인 시스템 / 퍼블리싱: `.claude/rules/fe/publishing-design-system.md`
 
 ## 진행 문서
